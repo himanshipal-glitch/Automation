@@ -749,57 +749,72 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
             else:
                 ap.to_excel(w, sheet_name="Payables", index=False)
 
-        # ── Sheet 4: Profitability Report (full line-by-line, WHOLE FY) ──────
-        # Closed months' rows come from the manual report files' Details sheets
-        # (the same source the summary freezes from); live months come from the
-        # uploaded MIS. No month appears twice, so summing the sheet's blocks
-        # cross-checks the summary's FY Total.
+        # ── Sheet 4: Profitability Report — whole FY, ONE uniform schema ─────
+        # Every row (frozen months from the manual files' Details + live months
+        # from the accumulated store) is aligned to the ENGINE's column set, so
+        # the sheet is a single auditable table: filter by Month, sum any column,
+        # cross-check the FY Total. Manual-only columns are dropped; engine
+        # columns the manual lacks stay blank. 'Row Source' marks provenance.
+        # No month appears twice per vertical.
         try:
             import frozen as _frozen
             import os as _os
             _fdet = _frozen.frozen_details(_os.path.dirname(_os.path.abspath(__file__)))
         except Exception:
             _fdet = {}
-        # live rows come from the ACCUMULATED store (every MIS upload upserted by
-        # shipment+invoice), not just the current upload — so months that dropped
-        # out of Zoho's rolling export stay in the report, and late CN/DN updates
-        # show their latest state. Falls back to the current upload if store empty.
         try:
             import database as _dbm
             _acc = _dbm.load_profit_details()
         except Exception:
-            _acc = None
-        _live_src = _acc if (_acc is not None and len(_acc)) else profit_df
+            _acc, _dbm = None, None
+        if _acc is not None and len(_acc):
+            _live_src = _acc
+        else:
+            _live_src = profit_df.copy()
+            if _dbm is not None:      # de-duplicate repeated column names
+                _live_src.columns = _dbm._uniq_cols(_live_src.columns)
+        _tgt = list(_live_src.columns)
+
+        def _nrm(s):
+            return "".join(ch for ch in str(s).lower() if ch.isalnum() or ch == "%")
+        _tmap = {}
+        for _c in _tgt:
+            _tmap.setdefault(_nrm(_c), _c)
+
+        def _align(dfm):
+            """Map a manual Details frame onto the engine's columns by name."""
+            ren, used = {}, set()
+            for _c in dfm.columns:
+                _t2 = _tmap.get(_nrm(_c))
+                if _t2 and _t2 not in used:
+                    ren[_c] = _t2
+                    used.add(_t2)
+            out = dfm.rename(columns=ren)
+            return out.loc[:, [c for c in out.columns if c in used]].reindex(columns=_tgt)
+
         rep_by_tab = ({vertical: split_by_category(_live_src).get(vertical, _live_src)}
                       if vertical else split_by_category(_live_src))
-        _r = 0
-        _live_parts = []
+        _parts = []
         for _t, _df_t in rep_by_tab.items():
             _f = _fdet.get(_t)
             if _f is not None:
                 _fdf, _fmonths = _f
-                _ml = ", ".join(sorted(_fmonths,
-                    key=lambda m: pd.to_datetime("01-" + m, format="%d-%b-%y", errors="coerce")))
-                pd.DataFrame([[f"■ {_t} — closed months ({_ml}) from the manual report file"]]) \
-                    .to_excel(w, sheet_name="Profitability Report", startrow=_r,
-                              index=False, header=False)
-                _fdf.to_excel(w, sheet_name="Profitability Report", startrow=_r + 1, index=False)
-                _r += len(_fdf) + 4
+                _al = _align(_fdf).copy()
+                _al["Row Source"] = f"Manual file ({_t})"
+                _parts.append(_al)
                 # live rows for this tab: only months NOT already frozen above
                 _mm = pd.to_datetime(_df_t.iloc[:, 2], errors="coerce").dt.strftime("%b-%y")
                 _df_t = _df_t[~_mm.isin(_fmonths)]
             if len(_df_t):
-                _live_parts.append(_df_t)
-        _live = pd.concat(_live_parts, ignore_index=True) if _live_parts else \
-            (rep_by_tab.get(vertical) if vertical else _live_src)
-        if _live is not None and len(_live):
-            pd.DataFrame([["■ Live months — accumulated across MIS uploads (latest state per shipment)"]]) \
-                .to_excel(w, sheet_name="Profitability Report", startrow=_r,
-                          index=False, header=False)
-            _live.to_excel(w, sheet_name="Profitability Report", startrow=_r + 1, index=False)
-        elif _r == 0:
-            (rep_by_tab.get(vertical) if vertical else _live_src) \
-                .to_excel(w, sheet_name="Profitability Report", index=False)
+                _lv = _df_t.reindex(columns=_tgt).copy()
+                _lv["Row Source"] = "Live (MIS)"
+                _parts.append(_lv)
+        if _parts:
+            _rep = pd.concat(_parts, ignore_index=True)
+        else:
+            _rep = _live_src.copy()
+            _rep["Row Source"] = "Live (MIS)"
+        _rep.to_excel(w, sheet_name="Profitability Report", index=False)
 
     buf.seek(0)
     return buf.read()

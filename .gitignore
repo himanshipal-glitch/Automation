@@ -1,0 +1,47 @@
+# ── WHITELIST MODE: ignore EVERYTHING, then re-allow code & docs only. ──
+# The folder holds live financial data (MIS exports, per-vertical reports,
+# persistent stores) and credentials — none of that may ever reach GitHub.
+*
+
+# code
+!.gitignore
+!*.py
+!requirements.txt
+
+# docs (text only — PDFs/DOCX/screenshots may embed real figures)
+!CLAUDE.md
+!MAINTAINER_GUIDE.md
+!USER_SOP.md
+!AUTOMATION_REPORT.md
+!WALKTHROUGH.md
+
+# app config (example only — NEVER the real secrets.toml)
+!.streamlit/
+.streamlit/*
+!.streamlit/secrets.toml.example
+!.streamlit/config.toml
+
+# assets
+!Recykal logo.jpg
+
+# explicit re-blocks (belt & braces even in whitelist mode)
+secrets.toml
+persistent/
+databases/
+__pycache__/
+*.xlsx
+*.xls
+*.pdf
+*.docx
+*.pptx
+*.parquet
+*.pkl
+walkthrough_shots/
+model_artifacts_national/
+MIS Docs*/
+_build_doc.py
+detector.py
+*.txt
+!requirements.txt
+desktop.ini
+~$*

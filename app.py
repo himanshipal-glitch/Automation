@@ -1,0 +1,1572 @@
+"""
+Zoho Data Pipeline Dashboard
+"""
+
+import io
+import pandas as pd
+import streamlit as st
+
+import database as db
+import cleaning
+import compute
+import reports
+
+st.set_page_config(
+    page_title="Zoho Data Pipeline",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ── Visual theme (Recykal) — presentation only, no content/logic ──────────────
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+:root{
+  --rk-green:#10b981; --rk-green-d:#047857; --rk-green-dd:#064e3b;
+  --rk-green-l:#d1fae5; --rk-ink:#0f2e26; --rk-card:#ffffff; --rk-line:#e2f3ec;
+}
+html, body, [class*="css"], .stApp{ font-family:'Inter', system-ui, sans-serif; }
+
+/* page fade-in + comfortable width */
+.main .block-container{ animation:rkFade .55s cubic-bezier(.21,.61,.35,1) both;
+  padding-top:2.2rem; max-width:1440px; }
+@keyframes rkFade{ from{opacity:0; transform:translateY(14px);} to{opacity:1; transform:none;} }
+
+[data-testid="stHeader"]{ background:transparent; backdrop-filter:blur(6px); }
+
+/* ── sidebar: deep-green gradient ── */
+[data-testid="stSidebar"]{
+  background:linear-gradient(180deg,var(--rk-green-dd) 0%,#065f46 55%,var(--rk-green-d) 100%);
+  border-right:0;
+}
+[data-testid="stSidebar"] *{ color:#ecfdf5 !important; }
+[data-testid="stSidebar"] [role="radiogroup"] label{
+  border-radius:10px; padding:.5rem .7rem; margin:3px 0; transition:.18s ease; cursor:pointer;
+}
+[data-testid="stSidebar"] [role="radiogroup"] label:hover{ background:rgba(255,255,255,.12); transform:translateX(3px); }
+/* logo sits in a clean white card on the green sidebar */
+[data-testid="stSidebar"] [data-testid="stImage"]{
+  background:#ffffff; border-radius:14px; padding:14px; margin:4px 0 6px;
+  box-shadow:0 4px 14px rgba(0,0,0,.18); }
+[data-testid="stSidebar"] [data-testid="stImage"] img{ border-radius:6px; }
+
+/* ── headings ── */
+h1{ font-weight:800; letter-spacing:-.025em;
+  background:linear-gradient(90deg,var(--rk-green-d),var(--rk-green));
+  -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; }
+h2,h3{ color:var(--rk-ink); font-weight:700; letter-spacing:-.02em; }
+
+/* ── metric cards ── */
+[data-testid="stMetric"]{
+  background:var(--rk-card); border:1px solid var(--rk-line); border-radius:16px;
+  padding:1rem 1.15rem; box-shadow:0 2px 10px rgba(6,78,59,.06);
+  transition:transform .2s ease, box-shadow .2s ease; animation:rkFade .5s ease both;
+}
+[data-testid="stMetric"]:hover{ transform:translateY(-3px); box-shadow:0 12px 26px rgba(6,78,59,.13); }
+[data-testid="stMetricValue"]{ color:var(--rk-green-d); font-weight:800; }
+[data-testid="stMetricLabel"]{ color:#5b7a70; font-weight:600; }
+
+/* ── tabs ── */
+.stTabs [data-baseweb="tab-list"]{ gap:6px; border-bottom:1px solid var(--rk-line); }
+.stTabs [data-baseweb="tab"]{ border-radius:10px 10px 0 0; padding:8px 16px; font-weight:600; transition:.18s; }
+.stTabs [data-baseweb="tab"]:hover{ background:#f0fbf6; }
+.stTabs [aria-selected="true"]{ background:var(--rk-green-l); color:var(--rk-green-d) !important; }
+
+/* ── buttons ── */
+.stButton>button, .stDownloadButton>button{
+  background:linear-gradient(90deg,var(--rk-green),var(--rk-green-d)); color:#fff !important;
+  border:0; border-radius:10px; padding:.5rem 1.15rem; font-weight:600;
+  box-shadow:0 4px 12px rgba(16,185,129,.30); transition:.2s ease;
+}
+.stButton>button:hover, .stDownloadButton>button:hover{
+  transform:translateY(-2px); box-shadow:0 9px 22px rgba(16,185,129,.45); }
+
+/* ── tables / expanders / dividers ── */
+[data-testid="stDataFrame"], [data-testid="stTable"]{ border-radius:12px; overflow:hidden; border:1px solid var(--rk-line); }
+[data-testid="stExpander"]{ border:1px solid var(--rk-line); border-radius:12px; box-shadow:0 1px 6px rgba(6,78,59,.04); }
+hr{ border-color:var(--rk-line); }
+
+/* file uploader + inputs accent */
+[data-testid="stFileUploaderDropzone"]{ border:1.5px dashed #9fdcc4; border-radius:14px; background:#f3fbf8; transition:.2s; }
+[data-testid="stFileUploaderDropzone"]:hover{ border-color:var(--rk-green); background:#eafaf2; }
+</style>
+""", unsafe_allow_html=True)
+
+
+# ── Sidebar ───────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.image("Recykal logo.jpg", width="stretch")
+    st.markdown("---")
+    page = st.radio(
+        "Navigate",
+        ["Upload Files", "View Databases", "Cleaning", "Summary Report", "Management Reports"],
+        label_visibility="collapsed",
+    )
+    st.markdown("---")
+    status = db.all_db_status()
+    loaded = [s for s, v in status.items() if v["exists"]]
+    st.caption(f"{len(loaded)} / {len(status)} sheets loaded")
+    for sheet in loaded:
+        tbls = status[sheet]["tables"]
+        row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())
+        st.caption(f"**{sheet}** — {row_str}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RECY — floating robot (eyes follow cursor + activity quips) with click-to-chat
+# ══════════════════════════════════════════════════════════════════════════════
+import assistant as _assistant
+import streamlit.components.v1 as _components
+
+_RECY_QUIPS = {
+    "Upload Files":       "Drop those Zoho files on me! 📥",
+    "View Databases":     "Peeking under the hood? 🔍",
+    "Cleaning":           "All tidied up ✨",
+    "Summary Report":     "Ohh — grabbing the sheets? 📊 Click me to chat!",
+    "Management Reports": "The nitty-gritty lives here 🧾",
+}
+
+# The chat is a popover whose trigger is CSS-fixed top-right and made invisible;
+# the animated robot is drawn on top of it, so clicking the robot opens the chat.
+_recy_pop = st.popover("Recy", use_container_width=False)
+with _recy_pop:
+    st.markdown("**🤖 Recy** — ask about the app or the numbers")
+    if not _assistant.is_configured():
+        st.caption("Add a Gemini API key to `.streamlit/secrets.toml` (`[gemini]` → `api_key`) to switch me on.")
+    # process a pending question (set by the form below, handled on rerun)
+    _pend = st.session_state.pop("recy_pending", None)
+    if _pend:
+        _hist = st.session_state.setdefault("recy_hist", [])
+        _hist.append({"role": "user", "content": _pend})
+        # live app-state snapshot so Recy knows where the user is & what's loaded
+        _built = bool(st.session_state.get("_recy_summaries"))
+        _state = (f"CURRENT STATE: the user is on the '{page}' page. "
+                  f"Datasets loaded: {', '.join(loaded) if loaded else 'none yet'}. "
+                  f"Profitability report is {'BUILT and on screen' if _built else 'not built yet'}. "
+                  "Answer with this in mind — don't tell them to upload/build things that are already done.")
+        with st.spinner("Recy is thinking…"):
+            _ans = _assistant.ask(_pend, st.session_state.get("_recy_summaries"), _hist, app_state=_state)
+        _hist.append({"role": "assistant", "content": _ans})
+    # fixed-size scrollable log — latest at the bottom, scroll up for older
+    with st.container(height=300):
+        _h = st.session_state.get("recy_hist", [])
+        if not _h:
+            st.caption("Hi! I'm Recy 🤖 — ask me how the app works, a rule, or a number.")
+        for _m in _h:
+            st.chat_message("user" if _m["role"] == "user" else "assistant").write(_m["content"])
+        st.markdown('<span class="recylog-end"></span>', unsafe_allow_html=True)
+    with st.form("recy_form", clear_on_submit=True):
+        _q = st.text_input("Ask…", label_visibility="collapsed",
+                           placeholder="Ask about the app or the numbers…")
+        if st.form_submit_button("Ask", use_container_width=True) and _q.strip():
+            st.session_state["recy_pending"] = _q.strip()
+            st.rerun()
+
+# Fix the popover trigger as an invisible 56px hotspot; robot SVG drawn over it.
+st.markdown("""
+<style>
+[data-testid="stPopover"]{position:fixed !important;top:74px;right:28px;z-index:100000;width:56px;}
+[data-testid="stPopover"] button{width:56px;height:56px;border-radius:50%;
+   background:transparent !important;border:none !important;color:transparent !important;
+   box-shadow:none !important;}
+@keyframes recybob{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown(
+    f"""
+<div style="position:fixed;top:68px;right:28px;z-index:100001;
+            display:flex;align-items:flex-start;gap:6px;pointer-events:none;">
+  <div id="recy-bubble" style="max-width:210px;background:#0b7a3b;color:#fff;padding:8px 11px;
+              border-radius:12px 12px 2px 12px;font-size:11.5px;line-height:1.35;
+              box-shadow:0 4px 12px rgba(0,0,0,.22);transition:all .15s;">{_RECY_QUIPS.get(page, "Hey, I'm Recy 🤖 — click me!")}</div>
+  <div id="recy-bot" style="position:relative;filter:drop-shadow(0 3px 5px rgba(0,0,0,.28));animation:recybob 2.6s ease-in-out infinite;">
+    <svg width="46" height="50" viewBox="0 0 46 50" xmlns="http://www.w3.org/2000/svg">
+      <line x1="23" y1="3" x2="23" y2="12" stroke="#0b7a3b" stroke-width="2.4"/>
+      <circle id="recy-antenna" cx="23" cy="3.5" r="3.2" fill="#12b866" style="transition:fill .3s ease;"/>
+      <rect x="3" y="21" width="4.5" height="12" rx="2.2" fill="#0b7a3b"/>
+      <rect x="38.5" y="21" width="4.5" height="12" rx="2.2" fill="#0b7a3b"/>
+      <rect x="6" y="12" width="34" height="28" rx="9" fill="#ffffff" stroke="#0b7a3b" stroke-width="2.6"/>
+      <rect x="11" y="18" width="24" height="15" rx="6" fill="#eafaf0"/>
+      <!-- eyebrows (curious) -->
+      <g id="recy-acc-brows" style="opacity:0;transition:opacity .25s ease;">
+        <line x1="14.5" y1="21" x2="20" y2="21.4" stroke="#0b7a3b" stroke-width="1.5" stroke-linecap="round"/>
+        <line x1="26" y1="19.8" x2="31.5" y2="21.6" stroke="#0b7a3b" stroke-width="1.5" stroke-linecap="round"/>
+      </g>
+      <!-- the eyes (hidden behind glasses / heart-eyes) -->
+      <g id="recy-eyes" style="transition:opacity .2s ease;">
+        <circle id="recy-eye-l" cx="17.5" cy="25.5" r="3.3" fill="#0b7a3b" style="transform-box:fill-box;transform-origin:center;transition:transform .16s ease-out;"/>
+        <circle id="recy-eye-r" cx="28.5" cy="25.5" r="3.3" fill="#0b7a3b" style="transform-box:fill-box;transform-origin:center;transition:transform .16s ease-out;"/>
+      </g>
+      <!-- sunglasses (cool) -->
+      <g id="recy-acc-glasses" style="opacity:0;transition:opacity .25s ease;">
+        <rect x="12.8" y="22.2" width="8.6" height="6.4" rx="3.1" fill="#0b7a3b"/>
+        <rect x="24.6" y="22.2" width="8.6" height="6.4" rx="3.1" fill="#0b7a3b"/>
+        <rect x="21.2" y="24.3" width="3.6" height="1.6" fill="#0b7a3b"/>
+        <line x1="7.5" y1="24" x2="12.8" y2="24.6" stroke="#0b7a3b" stroke-width="1.4"/>
+        <line x1="33.2" y1="24.6" x2="38.5" y2="24" stroke="#0b7a3b" stroke-width="1.4"/>
+        <line x1="14.5" y1="24" x2="18.5" y2="24" stroke="#8fd3a8" stroke-width="1" stroke-linecap="round" opacity=".7"/>
+        <line x1="26.5" y1="24" x2="30.5" y2="24" stroke="#8fd3a8" stroke-width="1" stroke-linecap="round" opacity=".7"/>
+      </g>
+      <path id="recy-mouth" d="M18 30.5 Q23 34 28 30.5" stroke="#0b7a3b" stroke-width="2" fill="none" stroke-linecap="round" style="transition:d .28s ease;"/>
+      <circle cx="12.5" cy="30" r="1.8" fill="#8fd3a8"/>
+      <circle cx="33.5" cy="30" r="1.8" fill="#8fd3a8"/>
+      <!-- sweat drop (alert) -->
+      <g id="recy-acc-sweat" fill="#4fa3ff" style="opacity:0;transition:opacity .25s ease;">
+        <path transform="translate(35 14.5)" d="M0 0 C2.2 3 2.2 5.2 0 5.2 C-2.2 5.2 -2.2 3 0 0 Z"/>
+      </g>
+      <!-- sparkles (celebrate) -->
+      <g id="recy-acc-sparkles" fill="#f4b400" style="opacity:0;transition:opacity .25s ease;">
+        <path transform="translate(9 15)"        d="M0 -2.6 L0.7 -0.7 L2.6 0 L0.7 0.7 L0 2.6 L-0.7 0.7 L-2.6 0 L-0.7 -0.7 Z"/>
+        <path transform="translate(37 14) scale(.8)" d="M0 -2.6 L0.7 -0.7 L2.6 0 L0.7 0.7 L0 2.6 L-0.7 0.7 L-2.6 0 L-0.7 -0.7 Z"/>
+        <path transform="translate(38 34) scale(.9)" d="M0 -2.6 L0.7 -0.7 L2.6 0 L0.7 0.7 L0 2.6 L-0.7 0.7 L-2.6 0 L-0.7 -0.7 Z"/>
+        <path transform="translate(8 35) scale(.7)"  d="M0 -2.6 L0.7 -0.7 L2.6 0 L0.7 0.7 L0 2.6 L-0.7 0.7 L-2.6 0 L-0.7 -0.7 Z"/>
+      </g>
+      <rect x="15" y="40" width="16" height="6" rx="3" fill="#0b7a3b"/>
+    </svg>
+  </div>
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+_components.html(
+    """
+<script>
+(function(){
+  const pdoc = window.parent.document;
+  // All mutable behaviour lives on pdoc.__recy so a Streamlit rerun (which re-injects
+  // this script) refreshes the logic WITHOUT re-adding listeners — edits hot-apply,
+  // no full browser refresh needed. The listeners/intervals below bind exactly once.
+  const R = pdoc.__recy = (pdoc.__recy || {mood:'idle', moodT:null, wasThinking:false, last:''});
+
+  // vertical tab labels → clean display name; matched on a punctuation-stripped key
+  // ("IT AD"→"itad", "IB(B2B)"→"ibb2b") so spaces/brackets don't make the match miss.
+  const VERTS=[['endgenerator','END GENERATOR'],['metal','METAL'],['plastic','PLASTIC'],
+    ['recommerce','RE-COMMERCE'],['itad','IT AD'],['afr','AFR'],['m4','M4'],
+    ['ibb2b','IB(B2B)'],['ibwarehouse','IB(WAREHOUSE)'],['enterprise','ENTERPRISE'],
+    ['rewerse','REWERSE']];
+  R.quip=function(t){t=(t||'').toLowerCase();if(!t)return null;
+    if(t.includes('download'))return 'Ohh — grabbing the sheets? 📊';
+    if(t.includes('send')||t.includes('email'))return 'Emailing the team? 📧';
+    if(t.includes('upload')||t.includes('choose files')||t.includes('drop')||t.includes('browse'))return 'Feed me those Zoho files! 📥';
+    if(t.includes('merge')||t.includes('compute')||t.includes('run pipeline'))return 'Crunching the numbers… 🔧';
+    if(t.includes('summary'))return 'The money view 💰';
+    if(t.includes('receiv'))return 'Who owes us? 🧾';
+    if(t.includes('payable'))return 'Who we owe 💸';
+    if(t.includes('all categories'))return 'The whole picture 🗂️';
+    const key=t.replace(/[^a-z0-9]/g,'');
+    for(const [k,label] of VERTS){if(key===k)return label+' — nice pick! 👀';}
+    if(t.includes('view database'))return 'Peeking under the hood 🔍';
+    if(t.includes('cleaning'))return 'All tidied up ✨';
+    return null;};
+  R.setBubble=function(t){const b=pdoc.getElementById('recy-bubble');if(b&&t&&t!==R.last){b.textContent=t;R.last=t;}};
+  R.hover=function(e){const el=e.target.closest('button,[role="tab"],label,a,summary,[data-testid="stFileUploaderDropzone"]');
+    if(!el)return;const q=R.quip((el.innerText||el.textContent||'').trim().slice(0,50));if(q)R.setBubble(q);};
+
+  // ── mood engine ───────────────────────────────────────────────────────────
+  // Each mood reshapes Recy's OWN face — no floating stickers. A mood declares:
+  //   mouth : the #recy-mouth path
+  //   eyeL/eyeR : per-eye transform (lets us wink one eye)
+  //   ant  : antenna colour
+  //   acc  : which face accessories to show — 'brows','glasses','sweat','sparkles'
+  //   hideEyes : hide the plain eyes (when glasses / heart-eyes take over)
+  // Add a new expression by adding one entry (+ an accessory <g> in the SVG if needed).
+  R.ACCS=['brows','glasses','sweat','sparkles'];
+  R.MOODS={
+    idle:     {mouth:'M18 30.5 Q23 34 28 30.5',                          eyeL:'',                eyeR:'',                ant:'#12b866', acc:[]},
+    thinking: {mouth:'M19 31.5 H27',                                     eyeL:'translateY(-1.6px)',eyeR:'translateY(-1.6px)',ant:'#f4b400', acc:['brows']},
+    happy:    {mouth:'M16.5 29.5 Q23 37 29.5 29.5',                      eyeL:'scaleY(.55)',     eyeR:'scaleY(.55)',     ant:'#12b866', acc:[]},
+    curious:  {mouth:'M18.5 31 Q23 33 27.5 30.5',                        eyeL:'translateY(-1px)',eyeR:'translateY(-1px)',ant:'#12b866', acc:['brows']},
+    wink:     {mouth:'M17 30 Q23 35.5 29 30.5',                          eyeL:'scaleY(.12)',     eyeR:'',                ant:'#12b866', acc:[]},
+    cool:     {mouth:'M17.5 31 Q23 34.5 28.5 31',                        eyeL:'',                eyeR:'',                ant:'#12b866', acc:['glasses'], hideEyes:true},
+    alert:    {mouth:'M20.5 32 a2.5 2.5 0 1 0 5 0 a2.5 2.5 0 1 0 -5 0',  eyeL:'scale(1.25)',     eyeR:'scale(1.25)',     ant:'#e23b3b', acc:['sweat']},
+    celebrate:{mouth:'M15.5 29 Q23 39 30.5 29',                          eyeL:'scaleY(.55)',     eyeR:'scaleY(.55)',     ant:'#f4b400', acc:['sparkles']},
+  };
+  // faces Recy cycles through each time you open the chat — a little surprise
+  R.GREETINGS=['happy','wink','curious','cool','celebrate'];
+  R.greetIdx=(R.greetIdx==null?-1:R.greetIdx);
+  R.setEyes=function(lt,rt){const l=pdoc.getElementById('recy-eye-l'),r=pdoc.getElementById('recy-eye-r');
+    if(l)l.style.transform=lt;if(r)r.style.transform=rt;};
+  R.paintEyes=function(tf){R.setEyes(tf,tf);};   // used by cursor-follow & blink (both eyes alike)
+  R.setMood=function(name,revert){const m=R.MOODS[name]||R.MOODS.idle;R.mood=name;
+    const mo=pdoc.getElementById('recy-mouth');if(mo)mo.setAttribute('d',m.mouth);
+    const an=pdoc.getElementById('recy-antenna');if(an)an.style.fill=m.ant;
+    const eyes=pdoc.getElementById('recy-eyes');if(eyes)eyes.style.opacity=m.hideEyes?'0':'1';
+    if(name==='idle')R.setEyes('','');           // idle hands the eyes back to the cursor
+    else R.setEyes(m.eyeL||'',m.eyeR||'');
+    R.ACCS.forEach(function(a){const g=pdoc.getElementById('recy-acc-'+a);
+      if(g)g.style.opacity=(m.acc&&m.acc.indexOf(a)>=0)?'1':'0';});
+    clearTimeout(R.moodT);
+    if(revert)R.moodT=setTimeout(function(){R.setMood('idle');},revert);
+  };
+  pdoc.__recySetMood=R.setMood;                // exposed for preview/manual testing
+
+  // opening the chat: cycle to the next fun greeting face
+  R.greet=function(){R.greetIdx=(R.greetIdx+1)%R.GREETINGS.length;
+    R.setMood(R.GREETINGS[R.greetIdx],2600);};
+
+  R.onClick=function(e){
+    R.hover(e);
+    const el=e.target.closest('button,[role="tab"],label,a,summary,[data-testid="stFileUploaderDropzone"],[data-testid="stDownloadButton"],[data-testid="stPopover"]');
+    if(!el)return;const t=(el.innerText||el.textContent||'').trim().toLowerCase();
+    // specific actions win first; the bare popover trigger (empty label) → new face
+    if(t==='ask'){R.setMood('thinking');}
+    else if(t.includes('download')||el.closest('[data-testid="stDownloadButton"]')){R.setMood('celebrate',3800);}
+    else if(el.closest('[data-testid="stPopover"]')&&(t===''||t.includes('recy'))){R.greet();}  // clicked Recy's face
+  };
+  R.onMove=function(e){
+    if(R.mood!=='idle')return;
+    const bot=pdoc.getElementById('recy-bot');if(!bot)return;
+    const r=bot.getBoundingClientRect();const cx=r.left+r.width/2,cy=r.top+r.height/2;
+    const a=Math.atan2(e.clientY-cy,e.clientX-cx),d=2.4;
+    R.paintEyes('translate('+Math.cos(a)*d+'px,'+Math.sin(a)*d+'px)');
+  };
+  R.scrollLog=function(){const m=pdoc.querySelector('.recylog-end');if(!m)return;
+    let p=m.parentElement;for(let i=0;i<8&&p;i++){if(p.scrollHeight>p.clientHeight+4){p.scrollTop=p.scrollHeight;return;}p=p.parentElement;}};
+  R.reactToState=function(){
+    if(pdoc.querySelector('[data-testid="stException"]')&&R.mood!=='alert'){R.setMood('alert',4000);return;}
+    const spin=/thinking/i.test((pdoc.querySelector('[data-testid="stSpinner"]')||{}).innerText||'');
+    if(spin){R.wasThinking=true;}
+    else if(R.wasThinking){R.wasThinking=false;if(R.mood==='thinking')R.setMood('happy',2800);}
+    const ok=Array.from(pdoc.querySelectorAll('[data-testid="stAlert"],[data-baseweb="notification"]'))
+      .some(function(n){return /sent to/i.test(n.innerText||'');});
+    if(ok&&R.mood!=='celebrate')R.setMood('celebrate',3000);
+  };
+
+  // ── bind listeners + timers ONCE (all delegate to the R.* above) ───────────
+  if(!pdoc.__recyBound){
+    pdoc.__recyBound=true;
+    pdoc.addEventListener('mouseover',function(e){R.hover(e);},true);
+    pdoc.addEventListener('click',function(e){R.onClick(e);},true);
+    pdoc.addEventListener('mousemove',function(e){R.onMove(e);},true);
+    // gentle blink every few seconds, only when idle — so Recy feels alive
+    setInterval(function(){
+      if(R.mood!=='idle')return;
+      const l=pdoc.getElementById('recy-eye-l'),r=pdoc.getElementById('recy-eye-r');
+      if(!l||!r)return;const pl=l.style.transform,pr=r.style.transform;
+      l.style.transform='scaleY(.1)';r.style.transform='scaleY(.1)';
+      setTimeout(function(){if(R.mood==='idle'){l.style.transform=pl;r.style.transform=pr;}},130);
+    },4200);
+    new MutationObserver(function(){clearTimeout(R.st);
+      R.st=setTimeout(function(){R.scrollLog();R.reactToState();},80);})
+      .observe(pdoc.body,{childList:true,subtree:true});
+  }
+})();
+</script>
+""",
+    height=0,
+)
+
+
+# ── Pipeline helper — auto-clean + split without user intervention ────────────
+def _auto_clean():
+    """Clean every sheet that has raw data but no cleaned table, then split Bill."""
+    for sheet, fn in [("Inv",  cleaning.clean_invoice),
+                      ("Bill", cleaning.clean_bill),
+                      ("CN",   cleaning.clean_cn),
+                      ("DN",   cleaning.clean_dn)]:
+        if db.read_table(sheet, "cleaned").empty:
+            raw = db.read_table(sheet, "raw").drop(columns=["_source_file"], errors="ignore")
+            if not raw.empty:
+                cleaned, _ = fn(raw)
+                db.write_cleaned(cleaned, sheet)
+    if db.read_table("Bill", "bill_purchases").empty:
+        cleaned_bill = db.read_table("Bill", "cleaned").drop(columns=["_source_file"], errors="ignore")
+        if not cleaned_bill.empty:
+            pur, log, _ = cleaning.split_bill(cleaned_bill)
+            db.write_table(pur, "Bill", "bill_purchases")
+            db.write_table(log, "Bill", "bill_logistics")
+
+
+def _auto_pipeline():
+    """Run full pipeline (clean → merge → compute) if raw data exists."""
+    _auto_clean()
+    if db.read_table("Merged", "profitability").empty:
+        inv      = db.read_table("Inv",  "cleaned").drop(columns=["_source_file"], errors="ignore")
+        bill_pur = db.read_table("Bill", "bill_purchases").drop(columns=["_source_file"], errors="ignore")
+        bill_log = db.read_table("Bill", "bill_logistics").drop(columns=["_source_file"], errors="ignore")
+        cn       = db.read_table("CN",   "cleaned").drop(columns=["_source_file"], errors="ignore")
+        dn       = db.read_table("DN",   "cleaned").drop(columns=["_source_file"], errors="ignore")
+        if not any(df.empty for df in [inv, bill_pur, cn, dn]):
+            # Older-bills store (exact shipment match) + Amazon×Recykal chain
+            hist = db.load_older_bills()
+            ytd = db.load_amazon_ytd()
+            amazon_map = cleaning.build_amazon_invoice_map(ytd) if not ytd.empty else {}
+            merged, _ = cleaning.run_full_pipeline(
+                inv, bill_pur, bill_log if not bill_log.empty else None, cn, dn,
+                history_df=hist if not hist.empty else None,
+                amazon_map=amazon_map)
+            profit = compute.build_profitability(
+                merged, logistics_df=bill_log if not bill_log.empty else None,
+                no_dn_shipments=db.load_no_dn_shipments()
+                | cleaning.void_dn_shipments(
+                    db.read_table("DN", "raw").drop(columns=["_source_file"], errors="ignore")))
+            db.write_table(merged,  "Merged", "inv_bill_cn_dn")
+            db.write_table(profit,  "Merged", "profitability")
+            # accumulate line rows permanently — Zoho's export is rolling, so a
+            # month's rows would otherwise vanish from later uploads. Upsert by
+            # shipment+invoice: late CN/DN updates replace the old version.
+            db.upsert_profit_details(profit)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE 1: Upload
+# ══════════════════════════════════════════════════════════════════════════════
+if page == "Upload Files":
+    st.title("Upload Zoho Excel Files")
+
+    import re as _re
+
+    def _is_history_bill(filename: str) -> bool:
+        """
+        Older bills file (the 7th upload) is named with extra descriptive words
+        (3+ tokens) or a 4-digit year — e.g. 'bills 2025', 'bill_old_recommerce'.
+        The current bills file is just 'bill' / 'Bills_1'.
+        """
+        base = filename.rsplit(".", 1)[0]
+        tokens = [t for t in _re.split(r"[\s_\-]+", base) if t]
+        has_year = any(_re.fullmatch(r"(19|20)\d{2}", t) for t in tokens)
+        return len(tokens) > 2 or has_year
+
+    import difflib as _difflib
+
+    # The ONLY sheets we load — everything else in the workbook is ignored.
+    # Each canonical dataset lists case-insensitive name variants; typos are caught
+    # by fuzzy matching below. "NO DN" is handled separately (exclusion list).
+    _CANON_ALIASES = {
+        "Bill": ["bill", "bills"],
+        "CN":   ["cn", "creditnote", "creditnotes"],
+        "DN":   ["dn", "debitnote", "debitnotes", "vendorcredit", "vendorcredits"],
+        "AP":   ["ap", "payable", "payables", "apageing", "apaging"],
+        "AR":   ["ar", "receivable", "receivables", "arageing", "araging"],
+        "Inv":  ["inv", "invoice", "invoices"],
+    }
+
+    def _norm(s) -> str:
+        return _re.sub(r"[^a-z0-9]", "", str(s).lower())
+
+    def _canon_sheet(name: str) -> str | None:
+        """Resolve a sheet name to a core dataset — case-insensitive + typo-tolerant.
+        'Bills'→Bill, 'INV'→Inv, 'Credit Notes'→CN, 'invoic'→Inv. 'NO DN' → None."""
+        n = _norm(name)
+        if not n or n == "nodn":
+            return None
+        for canon, aliases in _CANON_ALIASES.items():
+            if n in aliases:
+                return canon
+        pairs = [(a, c) for c, al in _CANON_ALIASES.items() for a in al]
+        m = _difflib.get_close_matches(n, [a for a, _ in pairs], n=1, cutoff=0.82)
+        if m:
+            return next(c for a, c in pairs if a == m[0])
+        return None
+
+    def _is_no_dn_sheet(df: pd.DataFrame, sheetname: str) -> bool:
+        """The exclusion list: a 'NO DN' sheet or any sheet with a
+        DebitNotefromBuyer flag column."""
+        if _norm(sheetname) == "nodn":
+            return True
+        cols = {_norm(c) for c in df.columns}
+        return any("debitnote" in c and "buyer" in c for c in cols)
+
+    # ── Dataset detection for individual files ────────────────────────────────
+    def _detect_dataset(df: pd.DataFrame, filename: str, sheetname: str) -> str | None:
+        target = _detect_dataset_base(df, filename, sheetname)
+        # A standalone Bill file with a historical name → BillHistory dataset.
+        # (Skip when the sheet is named exactly 'Bill' — that's the combined MIS
+        #  export, whose long filename would otherwise trip the history rule.)
+        if target == "Bill" and _canon_sheet(sheetname) is None and _is_history_bill(filename):
+            return "BillHistory"
+        return target
+
+    def _detect_dataset_base(df: pd.DataFrame, filename: str, sheetname: str) -> str | None:
+        """
+        Figure out which dataset (Bill / Inv / CN / DN / AP / AR ...) a sheet
+        belongs to. Priority: exact sheet name → column signature →
+        aging-report keywords → filename keywords.
+        """
+        # 1. Sheet-name match — case-insensitive + typo-tolerant (Bills→Bill, INV→Inv)
+        canon = _canon_sheet(sheetname)
+        if canon:
+            return canon
+
+        # 2. Column signature — most reliable for standalone exports
+        cols = {str(c).strip().lower() for c in df.columns}
+        signatures = [
+            ("Bill", {"bill status", "bill number"}),
+            ("Inv",  {"invoice status", "invoice number"}),
+            ("CN",   {"credit note status", "credit note number"}),
+            ("DN",   {"vendor credit status", "vendor credit number"}),
+            ("AP",   {"age", "vendor_name", "balance"}),
+            ("AR",   {"age", "customer_name", "balance"}),
+        ]
+        for target, sig in signatures:
+            if sig.issubset(cols):
+                return target
+
+        text = f"{filename} {sheetname}".lower()
+
+        # 3. Aging reports FIRST — their filenames contain "bill"/"invoice"
+        #    ("AP Aging Details By Bill Due Date") and would otherwise be
+        #    misrouted to Bill/Inv, overwriting real data.
+        if "ap aging" in text or "ap ageing" in text:
+            return "AP"
+        if "ar aging" in text or "ar ageing" in text:
+            return "AR"
+
+        # 4. Junk guard — sheets with <3 columns (dropdowns, notes) are never
+        #    routed by filename keywords; they'd overwrite a real dataset.
+        if len(df.columns) < 3:
+            return None
+
+        # 5. Filename / sheet-name keywords
+        keyword_map = [
+            ("vendor credit", "DN"), ("debit note", "DN"), ("debitnote", "DN"), ("dn", "DN"),
+            ("credit note", "CN"), ("creditnote", "CN"), ("cn", "CN"),
+            ("bill", "Bill"),
+            ("invoice", "Inv"), ("inv", "Inv"),
+            ("payable", "AP"), ("ap", "AP"),
+            ("receivable", "AR"), ("ar", "AR"),
+            ("p&l", "P&L"), ("pnl", "P&L"),
+        ]
+        for kw, target in keyword_map:
+            if kw in text.split() or kw in text:
+                return target
+        return None
+
+    def _fix_title_header(file_bytes: bytes, sheet: str, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Zoho aging exports carry one or more title/total rows above the real header
+        (so most columns read as 'Unnamed: N'). Older exports had 1 title row; the
+        newer MIS export has 2 (a blank row + a totals row). Instead of assuming a
+        fixed offset, FIND the header row: the top row whose cells are mostly text
+        labels (headers), not the numeric totals row or blank rows.
+        """
+        unnamed = sum(1 for c in df.columns if str(c).startswith("Unnamed"))
+        if len(df.columns) > 0 and unnamed >= len(df.columns) / 2:
+            raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet, header=None, nrows=15)
+            best_i, best_score = 0, -1
+            for i in range(len(raw)):
+                # score = how many cells are non-empty text labels (header-like);
+                # the totals row scores low (numbers), blank rows score 0.
+                strn = sum(1 for x in raw.iloc[i] if isinstance(x, str) and x.strip())
+                if strn > best_score:
+                    best_score, best_i = strn, i
+            return pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet, header=best_i)
+        return df
+
+    def _ingest_sheet(df: pd.DataFrame, dataset: str, filename: str, sheetname: str,
+                      results: list, accum: dict):
+        """Accumulate the sheet under its dataset (multiple sheets/files combine)."""
+        df = df.dropna(how="all")
+        if df.empty:
+            results.append({"File": filename, "Sheet": sheetname, "Dataset": "—", "Rows": 0, "Status": "⚠ Empty"})
+            return
+        df = df.copy()
+        df["_source_file"] = filename
+        accum.setdefault(dataset, []).append(df)
+        results.append({"File": filename, "Sheet": sheetname, "Dataset": dataset, "Rows": len(df), "Status": "✅"})
+
+    def _process_excel(file_bytes: bytes, filename: str, results: list, accum: dict):
+        """Parse one Excel file's sheets, auto-detect each sheet's dataset, accumulate."""
+        try:
+            xl = pd.ExcelFile(io.BytesIO(file_bytes))
+            low = filename.lower()
+            # "CF.DN = No" exclusion list — shipments that should NOT get the provision.
+            # Detected by a DebitNotefromBuyer column, or a no-dn filename keyword.
+            ex0 = pd.read_excel(io.BytesIO(file_bytes), sheet_name=xl.sheet_names[0], nrows=3)
+            ex_cols = {str(c).strip().lower().replace(" ", "") for c in ex0.columns}
+            has_dnbuyer = any("debitnote" in c and "buyer" in c for c in ex_cols)
+            if has_dnbuyer or any(k in low for k in ["no dn", "no_dn", "cf.dn", "cf dn", "dn no", "dn status", "non dn", "exclude"]):
+                ex = pd.read_excel(io.BytesIO(file_bytes), sheet_name=xl.sheet_names[0]).dropna(how="all")
+                n = db.save_no_dn_shipments(ex)
+                results.append({"File": filename, "Sheet": xl.sheet_names[0], "Dataset": "No-DN exclusion (saved)",
+                                "Rows": n, "Status": "✅"})
+                return
+            # Amazon × Recykal file — grab the 'YTD Sales' sheet (header on row 4)
+            if "YTD Sales" in xl.sheet_names or "amazon" in low or "recykal" in low:
+                if "YTD Sales" in xl.sheet_names:
+                    ytd = pd.read_excel(io.BytesIO(file_bytes), sheet_name="YTD Sales", header=3).dropna(how="all")
+                    accum.setdefault("AmazonYTD", []).append(ytd)
+                    results.append({"File": filename, "Sheet": "YTD Sales", "Dataset": "AmazonYTD",
+                                    "Rows": len(ytd), "Status": "✅"})
+                    return
+            # Only these are ever ingested — any other sheet (P&L, Account
+            # Transactions, dropdowns, …) is ignored even if present in the file.
+            ALLOWED_INGEST = {"Bill", "CN", "DN", "AP", "AR", "Inv", "BillHistory"}
+            for sheet in xl.sheet_names:
+                df = pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet)
+                df = _fix_title_header(file_bytes, sheet, df)
+                # NO-DN sheet → REPLACE the permanent exclusion list, then skip it
+                if _is_no_dn_sheet(df, sheet):
+                    n = db.save_no_dn_shipments(df.dropna(how="all"))
+                    results.append({"File": filename, "Sheet": sheet,
+                                    "Dataset": "No-DN exclusion (replaced)", "Rows": n, "Status": "✅"})
+                    continue
+                dataset = _detect_dataset(df, filename, sheet)
+                if dataset not in ALLOWED_INGEST:
+                    why = ("not one of Bill/CN/DN/AP/AR/Inv — ignored"
+                           if dataset else "not recognised as a dataset")
+                    results.append({"File": filename, "Sheet": sheet, "Dataset": "—",
+                                    "Rows": 0, "Status": f"⏭ Skipped — {why}"})
+                    continue
+                _ingest_sheet(df, dataset, filename, sheet, results, accum)
+        except Exception as e:
+            results.append({"File": filename, "Sheet": "—", "Dataset": "—", "Rows": 0, "Status": f"❌ {e}"})
+
+    st.markdown(
+        "Upload the Zoho exports as **individual Excel files** (multiple allowed) or a single **ZIP** "
+        "containing them. Each file/sheet is auto-detected and routed to the right dataset — "
+        "**Bill, Invoice, CN, DN, AP, AR** — by its columns, sheet name, or filename."
+    )
+
+    # ── Permanent older-bills store status ────────────────────────────────────
+    _ob_count = db.older_bills_count()
+    with st.expander(f"🗄️ Permanent older-bills store — {_ob_count:,} rows"
+                     + ("" if _ob_count else " (empty)"), expanded=False):
+        st.caption(
+            "Older bills (e.g. Apr-25 → Mar-26) are merged and saved here permanently. "
+            "They survive across sessions, so you only upload them once — any future MIS "
+            "upload with missing bills automatically pulls costs from this store. "
+            "Uploading more older-bill files adds to it (duplicates removed)."
+        )
+        if _ob_count:
+            ob = db.load_older_bills()
+            rc = ob["Account"].astype(str).str.contains("Re-Commerce", case=False, na=False).sum() if "Account" in ob.columns else 0
+            st.write(f"Total rows: **{_ob_count:,}** · Re-Commerce lines: **{rc:,}**")
+            if st.button("🗑️ Clear permanent older-bills store", key="clear_ob"):
+                db.clear_older_bills()
+                st.success("Older-bills store cleared.")
+                st.rerun()
+
+    _ytd_count = db.amazon_ytd_count()
+    with st.expander(f"🟠 Amazon × Recykal YTD store — {_ytd_count:,} rows"
+                     + ("" if _ytd_count else " (empty)"), expanded=False):
+        st.caption(
+            "The Amazon × Recykal 'YTD Sales' sheet links each Recykal invoice "
+            "(Invoice ID) to its Amazon invoice numbers (Invoice no.). Used to pin the "
+            "EXACT older-bill line for a missing-bill item: invoice → Amazon invoice no. "
+            "→ older bills (Bill Number + material). Upload once; persists across sessions."
+        )
+        if _ytd_count and st.button("🗑️ Clear Amazon×Recykal store", key="clear_ytd"):
+            db.clear_amazon_ytd()
+            st.success("Amazon×Recykal store cleared.")
+            st.rerun()
+
+    _pd_count = db.profit_details_count()
+    with st.expander(f"📚 Accumulated profitability details — {_pd_count:,} line rows"
+                     + ("" if _pd_count else " (empty)"), expanded=False):
+        st.caption(
+            "Every MIS upload's computed line rows are stored here permanently, "
+            "upserted by Shipment + Invoice — so months that drop out of Zoho's "
+            "rolling export stay in the Profitability Report sheet, and late CN/DN "
+            "updates replace a shipment's old rows with the newest state."
+        )
+        if _pd_count and st.button("🗑️ Clear accumulated details", key="clear_pdet"):
+            db.clear_profit_details()
+            st.success("Accumulated details cleared.")
+            st.rerun()
+
+    _nodn_count = db.no_dn_count()
+    with st.expander(f"🚫 'CF.DN = No' shipment exclusion list — {_nodn_count:,} shipments"
+                     + ("" if _nodn_count else " (empty)"), expanded=False):
+        st.caption(
+            "Shipments listed here (CF.DN = No/false) are **excluded** from the ReWerse "
+            "2.5% CN/DN provision. Provision applies to ReWerse shipments NOT in this list. "
+            "Upload a file whose name contains 'no dn' / 'cf.dn' with a Shipment ID column. "
+            "Until uploaded, the list is empty so the provision applies to all ReWerse shipments."
+        )
+        if _nodn_count and st.button("🗑️ Clear exclusion list", key="clear_nodn"):
+            db.clear_no_dn_shipments()
+            st.success("Exclusion list cleared.")
+            st.rerun()
+
+    uploaded_files = st.file_uploader(
+        "Drop Excel files or a ZIP here",
+        type=["xlsx", "xls", "zip"],
+        accept_multiple_files=True,
+    )
+
+    results = []
+    if uploaded_files:
+        import zipfile
+        accum: dict = {}
+        with st.spinner(f"Processing {len(uploaded_files)} upload(s)..."):
+            for uploaded in uploaded_files:
+                file_bytes = uploaded.read()
+                if uploaded.name.lower().endswith(".zip"):
+                    try:
+                        with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
+                            excel_members = [m for m in zf.namelist()
+                                             if m.lower().endswith((".xlsx", ".xls"))
+                                             and not m.startswith("__MACOSX")]
+                            if not excel_members:
+                                results.append({"File": uploaded.name, "Sheet": "—", "Dataset": "—",
+                                                "Rows": 0, "Status": "❌ No Excel files inside ZIP"})
+                            for member in excel_members:
+                                _process_excel(zf.read(member), member.split("/")[-1], results, accum)
+                    except Exception as e:
+                        results.append({"File": uploaded.name, "Sheet": "—", "Dataset": "—", "Rows": 0, "Status": f"❌ {e}"})
+                else:
+                    _process_excel(file_bytes, uploaded.name, results, accum)
+
+            # Write each dataset ONCE — combining all its sheets/files (e.g. the
+            # older-bills file's two bill sheets are concatenated, not overwritten).
+            for dataset, frames in accum.items():
+                combined = pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
+                if dataset == "BillHistory":
+                    # Persist to the permanent on-disk older-bills store (accumulates
+                    # across uploads, de-duped) — survives sessions so the user need
+                    # not re-upload it every time.
+                    total = db.save_older_bills(combined)
+                    results.append({"File": "→ permanent older-bills store", "Sheet": "merged",
+                                    "Dataset": "BillHistory (saved)", "Rows": total, "Status": "✅"})
+                elif dataset == "AmazonYTD":
+                    total = db.save_amazon_ytd(combined)
+                    results.append({"File": "→ permanent Amazon×Recykal store", "Sheet": "YTD Sales",
+                                    "Dataset": "AmazonYTD (saved)", "Rows": total, "Status": "✅"})
+                else:
+                    db.write_sheet(combined, dataset, table="raw")
+            # Reset any stale derived tables so the pipeline recomputes cleanly
+            for tbl in ("cleaned", "bill_purchases", "bill_logistics"):
+                for sh in ("Inv", "Bill", "CN", "DN"):
+                    db.session_drop(sh, tbl)
+            db.session_drop("Merged", "profitability")
+            db.session_drop("Merged", "inv_bill_cn_dn")
+            db.session_drop("Merged", "price_book")
+
+    if results:
+        ok = sum(1 for r in results if r["Status"] == "✅")
+        st.success(f"Loaded {ok} dataset(s) successfully")
+        st.dataframe(pd.DataFrame(results), use_container_width=True, hide_index=True)
+
+        loaded_now = {r["Dataset"] for r in results if r["Status"] == "✅"}
+        needed = {"Bill", "Inv", "CN", "DN"}
+        missing = needed - loaded_now - {s for s, v in db.all_db_status().items() if v["exists"]}
+        if missing:
+            st.warning(f"Still missing for profitability: {', '.join(sorted(missing))}")
+        else:
+            st.info("All 4 core datasets present — go to **Summary Report** for the profitability report.")
+    else:
+        st.markdown("### Expected datasets")
+        cols = st.columns(3)
+        for i, sheet in enumerate(["Bill", "Inv", "CN", "DN", "AP", "AR"]):
+            with cols[i % 3]:
+                st.info(f"**{sheet}** — auto-detected by columns, or name the file `{sheet.lower()}.xlsx`")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE 2: View Databases
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "View Databases":
+    st.title("View Databases")
+    status = db.all_db_status()
+    loaded = {s: v for s, v in status.items() if v["exists"]}
+
+    if not loaded:
+        st.info("No data yet. Upload a file on the **Upload Files** page.")
+    else:
+        cols = st.columns(4)
+        for i, (sheet, v) in enumerate(loaded.items()):
+            with cols[i % 4]:
+                total = sum(v["tables"].values())
+                st.metric(sheet, f"{total:,} rows", v["db_file"])
+
+        st.markdown("---")
+        sheet_sel = st.selectbox("Sheet / DB", list(loaded.keys()))
+        if sheet_sel:
+            tables = db.list_tables(sheet_sel)
+            tbl_sel = st.selectbox("Table", tables)
+            n = st.slider("Rows", 10, 500, 50, step=10)
+            if tbl_sel:
+                df = db.read_table(sheet_sel, tbl_sel).drop(columns=["_source_file"], errors="ignore")
+                st.dataframe(df.head(n), use_container_width=True, hide_index=True)
+                st.download_button(
+                    f"Download {sheet_sel}_{tbl_sel}.csv",
+                    df.to_csv(index=False).encode(),
+                    file_name=f"{sheet_sel}_{tbl_sel}.csv",
+                    mime="text/csv",
+                )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE 3: Cleaning
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "Cleaning":
+    st.title("Data Cleaning")
+
+    tab_bill, tab_inv, tab_cn, tab_dn = st.tabs(["📄 Bill", "🧾 Invoice", "📝 Credit Notes (CN)", "📋 Vendor Credits (DN)"])
+
+    # ── helper to render a cleaning section ──────────────────────────────────
+    def render_cleaning(sheet: str, clean_fn, rules_md: str, rule_cols: dict):
+        raw_df = db.read_table(sheet, "raw").drop(columns=["_source_file"], errors="ignore")
+        if raw_df.empty:
+            st.warning(f"No {sheet} data found. Please upload the Excel file first.")
+            return
+
+        st.metric("Raw rows", len(raw_df))
+
+        with st.expander("Raw data preview", expanded=False):
+            st.dataframe(raw_df.head(30), use_container_width=True, hide_index=True)
+
+        st.markdown("#### Cleaning Rules")
+        st.markdown(rules_md)
+
+        # Show value counts for key columns
+        vcols = st.columns(len(rule_cols))
+        for i, (col_label, col_candidates) in enumerate(rule_cols.items()):
+            actual = cleaning._col(raw_df, *col_candidates)
+            with vcols[i]:
+                st.markdown(f"**{col_label}**")
+                if actual:
+                    vc = raw_df[actual].value_counts(dropna=False).rename("Count").reset_index()
+                    vc.columns = [actual, "Count"]
+                    st.dataframe(vc, use_container_width=True, hide_index=True)
+                else:
+                    st.caption("Column not found in data")
+
+        st.markdown("---")
+
+        # Preview stats before running
+        preview_df, preview_stats = clean_fn(raw_df.copy())
+        dropped = preview_stats["original_rows"] - preview_stats["final_rows"]
+        st.info(
+            f"Cleaning will reduce **{preview_stats['original_rows']:,} → "
+            f"{preview_stats['final_rows']:,} rows** (drop {dropped:,} rows)."
+        )
+
+        if st.button(f"▶ Run Cleaning — {sheet}", type="primary", key=f"run_{sheet}"):
+            cleaned_df, stats = clean_fn(raw_df.copy())
+            db.write_cleaned(cleaned_df, sheet)
+            st.success(f"Saved to `{db.SHEET_DB_MAP.get(sheet, sheet)}.db` → table `cleaned`")
+
+            # Stats row
+            stat_items = {k: v for k, v in stats.items() if k not in ("original_rows", "final_rows", "accounts_kept")}
+            scols = st.columns(len(stat_items) + 2)
+            scols[0].metric("Original", stats["original_rows"])
+            for i, (k, v) in enumerate(stat_items.items()):
+                label = k.replace("dropped_", "Dropped — ").replace("_", " ").title()
+                scols[i + 1].metric(label, v if isinstance(v, str) else f"-{v}")
+            scols[-1].metric("Final rows", stats["final_rows"])
+
+            st.subheader("Cleaned Data")
+            st.dataframe(cleaned_df, use_container_width=True, hide_index=True)
+            st.download_button(
+                f"Download cleaned_{sheet.lower()}.csv",
+                cleaned_df.to_csv(index=False).encode(),
+                file_name=f"cleaned_{sheet.lower()}.csv",
+                mime="text/csv",
+            )
+
+    # ── Bill ──────────────────────────────────────────────────────────────────
+    with tab_bill:
+        render_cleaning(
+            sheet="Bill",
+            clean_fn=cleaning.clean_bill,
+            rules_md=(
+                "| # | Column | Rule |\n"
+                "|---|--------|------|\n"
+                "| 1 | Account | Keep rows containing `Marketplace Purchases` or `Marketplace Logistics` |\n"
+                "| 2 | Bill Status | Remove `Void` and `Draft` |\n"
+                "| — | Branch Name | No filter — all branches kept |"
+            ),
+            rule_cols={
+                "Account": ["Account"],
+                "Bill Status": ["Bill_Status", "Bill Status"],
+            },
+        )
+
+        st.markdown("---")
+        st.subheader("Split Cleaned Bill by Account")
+        st.markdown(
+            "Splits the cleaned Bill table into two sub-tables stored in `bill.db`:\n"
+            "- `bill_purchases` — Marketplace Purchases rows\n"
+            "- `bill_logistics` — Marketplace Logistics rows"
+        )
+
+        cleaned_bill = db.read_table("Bill", "cleaned").drop(columns=["_source_file"], errors="ignore")
+        if cleaned_bill.empty:
+            st.warning("Run Bill cleaning first to generate the cleaned table.")
+        else:
+            # Preview split counts
+            purchases_prev = cleaned_bill[cleaned_bill["Account"].str.contains("Marketplace Purchases", case=False, na=False)]
+            logistics_prev = cleaned_bill[cleaned_bill["Account"].str.contains("Marketplace Logistics", case=False, na=False)]
+            c1, c2 = st.columns(2)
+            c1.metric("Marketplace Purchases rows", len(purchases_prev))
+            c2.metric("Marketplace Logistics rows", len(logistics_prev))
+
+            if st.button("▶ Split Bill", type="primary", key="split_bill"):
+                purchases_df, logistics_df, stats = cleaning.split_bill(cleaned_bill)
+                db.write_table(purchases_df, "Bill", "bill_purchases")
+                db.write_table(logistics_df, "Bill", "bill_logistics")
+                st.success("Saved `bill_purchases` and `bill_logistics` to `bill.db`")
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("**Marketplace Purchases**")
+                    st.dataframe(purchases_df, use_container_width=True, hide_index=True)
+                    st.download_button("Download bill_purchases.csv",
+                                       purchases_df.to_csv(index=False).encode(),
+                                       file_name="bill_purchases.csv", mime="text/csv")
+                with col2:
+                    st.markdown("**Marketplace Logistics**")
+                    if logistics_df.empty:
+                        st.info("No Marketplace Logistics rows in current data.")
+                    else:
+                        st.dataframe(logistics_df, use_container_width=True, hide_index=True)
+                        st.download_button("Download bill_logistics.csv",
+                                           logistics_df.to_csv(index=False).encode(),
+                                           file_name="bill_logistics.csv", mime="text/csv")
+
+    # ── Invoice ───────────────────────────────────────────────────────────────
+    with tab_inv:
+        render_cleaning(
+            sheet="Inv",
+            clean_fn=cleaning.clean_invoice,
+            rules_md=(
+                "| # | Column | Rule |\n"
+                "|---|--------|------|\n"
+                "| 1 | Account | Keep rows containing `Marketplace Sales` or `Marketplace Logistics` |\n"
+                "| 2 | Invoice Status | Remove `Void` and `Draft` |\n"
+                "| — | Branch Name | No filter — all branches kept |"
+            ),
+            rule_cols={
+                "Account": ["Account"],
+                "Invoice Status": ["Invoice_Status", "Invoice Status"],
+            },
+        )
+
+    # ── CN ────────────────────────────────────────────────────────────────────
+    with tab_cn:
+        render_cleaning(
+            sheet="CN",
+            clean_fn=cleaning.clean_cn,
+            rules_md=(
+                "| # | Column | Rule |\n"
+                "|---|--------|------|\n"
+                "| 1 | Credit Note Status | Remove `Void` and `Pending` |"
+            ),
+            rule_cols={
+                "Credit Note Status": ["Credit_Note_Status", "Credit Note Status"],
+            },
+        )
+
+    # ── DN ────────────────────────────────────────────────────────────────────
+    with tab_dn:
+        render_cleaning(
+            sheet="DN",
+            clean_fn=cleaning.clean_dn,
+            rules_md=(
+                "| # | Column | Rule |\n"
+                "|---|--------|------|\n"
+                "| 1 | Vendor Credit Status | Remove `Void` and `Pending` |"
+            ),
+            rule_cols={
+                "Vendor Credit Status": ["Vendor_Credit_Status", "Vendor Credit Status"],
+            },
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE 4: Merge
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "Merge & Compute":
+    st.title("Merge & Profitability Compute")
+
+    # ── Auto-run full pipeline (clean → split → merge → compute) ────────────
+    with st.spinner("Preparing data..."):
+        _auto_pipeline()
+
+    # ── Load all cleaned tables ────────────────────────────────────────────────
+    inv_df      = db.read_table("Inv",  "cleaned").drop(columns=["_source_file"], errors="ignore")
+    bill_pur_df = db.read_table("Bill", "bill_purchases").drop(columns=["_source_file"], errors="ignore")
+    bill_log_df = db.read_table("Bill", "bill_logistics").drop(columns=["_source_file"], errors="ignore")
+    cn_df       = db.read_table("CN",   "cleaned").drop(columns=["_source_file"], errors="ignore")
+    dn_df       = db.read_table("DN",   "cleaned").drop(columns=["_source_file"], errors="ignore")
+
+    # ── Status check ──────────────────────────────────────────────────────────
+    missing = [name for name, df in [("Invoice",inv_df),("Bill",bill_pur_df),("CN",cn_df),("DN",dn_df)] if df.empty]
+    if missing:
+        st.warning(f"No raw data found for: {', '.join(missing)}. Please upload a file first.")
+    else:
+        # ── Merge info (informational, no button) ─────────────────────────────
+        st.markdown("### How the data is merged")
+        st.markdown("""
+| Step | Left table | Right table | Join key | Type |
+|------|-----------|-------------|----------|------|
+| 1 | Invoice (cleaned) | Bill Purchases | `CFSO_Number` + `Item_Name` | Left join |
+| 2 | Step 1 result | CN (pivoted wide, max 2) | `CFSO_Number` = `Referenceno` | Left join |
+| 3 | Step 2 result | DN (pivoted wide, max 2) | `CFSO_Number` = `Referenceno` | Left join |
+| 4 | Step 3 result | Formula engine (compute.py) | — | Calculated columns |
+        """)
+
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Invoice rows", len(inv_df))
+        c2.metric("Bill (purchases)", len(bill_pur_df))
+        c3.metric("Bill (logistics)", len(bill_log_df))
+        c4.metric("CN rows", len(cn_df))
+        c5.metric("DN rows", len(dn_df))
+
+        with st.expander("CN / DN distribution per shipment"):
+            ea, eb = st.columns(2)
+            with ea:
+                st.caption("Credit Notes per Shipment")
+                cn_cnt = cn_df.groupby("Referenceno").size().value_counts().sort_index().reset_index()
+                cn_cnt.columns = ["CN count", "Shipments"]
+                st.dataframe(cn_cnt, use_container_width=True, hide_index=True)
+                capped = int((cn_df.groupby("Referenceno").size() >= 3).sum())
+                if capped: st.warning(f"{capped} shipment(s) have 3+ CNs — only first 2 kept.")
+            with eb:
+                st.caption("Vendor Credits per Shipment")
+                dn_cnt = dn_df.groupby("Referenceno").size().value_counts().sort_index().reset_index()
+                dn_cnt.columns = ["DN count", "Shipments"]
+                st.dataframe(dn_cnt, use_container_width=True, hide_index=True)
+                capped = int((dn_df.groupby("Referenceno").size() >= 3).sum())
+                if capped: st.warning(f"{capped} shipment(s) have 3+ DNs — only first 2 kept.")
+
+        st.markdown("---")
+        st.markdown("### Run Pipeline")
+
+        with st.spinner("Merging all 4 sheets and computing profitability columns..."):
+            # Older-bills store (exact shipment match) + Amazon×Recykal chain
+            hist_df = db.load_older_bills()
+            ytd_df = db.load_amazon_ytd()
+            amazon_map = cleaning.build_amazon_invoice_map(ytd_df) if not ytd_df.empty else {}
+            merged_raw, pipe_stats = cleaning.run_full_pipeline(
+                inv_df, bill_pur_df, bill_log_df if not bill_log_df.empty else None,
+                cn_df, dn_df,
+                history_df=hist_df if not hist_df.empty else None,
+                amazon_map=amazon_map
+            )
+            db.write_table(merged_raw, "Merged", "inv_bill_cn_dn")
+
+            # Build exact-named report (for display + download)
+            profit_df = compute.build_profitability(
+                merged_raw,
+                logistics_df=bill_log_df if not bill_log_df.empty else None,
+                no_dn_shipments=db.load_no_dn_shipments()
+                | cleaning.void_dn_shipments(
+                    db.read_table("DN", "raw").drop(columns=["_source_file"], errors="ignore"))
+            )
+            # Write to DB (auto-deduplicates col names for SQLite)
+            db.write_table(profit_df, "Merged", "profitability")
+
+        st.success(f"Pipeline complete — {len(profit_df):,} rows · {len(profit_df.columns)} columns saved to `merged.db → profitability`")
+
+        # ── Missing-bill cost fill notice ─────────────────────────────────────
+        hist_filled = pipe_stats.get("hist_filled", 0)
+        orphan_bills = pipe_stats.get("orphan_bills", 0)
+        if hist_filled or orphan_bills:
+            st.info(
+                f"**Missing-bill costing** — {hist_filled} Re-Commerce row(s) costed from the "
+                f"Amazon × Recykal invoice chain / exact older-bill shipment match. "
+                f"{orphan_bills} extra bill(s) (other verticals) appended at the bottom with "
+                f"blank invoice columns. See the **Cost Source** column."
+            )
+
+        # ── Key metrics ───────────────────────────────────────────────────────
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Total rows", f"{len(profit_df):,}")
+        m2.metric("Matched (bill found)", pipe_stats.get("matched_rows","—"))
+        m3.metric("Unmatched invoices", pipe_stats.get("unmatched_rows","—"))
+        # 'Margin' col 66 (index 65) = BO = profitability margin
+        margin_col = profit_df.iloc[:, 65]
+        m4.metric("Total Margin", f"₹{margin_col.sum():,.0f}")
+
+        # ── Section previews ──────────────────────────────────────────────────
+        # Use iloc-based column selection to handle duplicate names safely
+        col_list = list(profit_df.columns)
+        def _idx(*names):
+            """Return list of positional indices for given column names (first match each)."""
+            result = []
+            used = set()
+            for name in names:
+                for i, c in enumerate(col_list):
+                    if c == name and i not in used:
+                        result.append(i)
+                        used.add(i)
+                        break
+            return result
+
+        sections = {
+            "Raw Data + Purchase":  _idx("Shipment ID","Quarter","Month","Date","Supplier Name","Material","Qty (Kg)","Price/Kg","Purchase Price","Return Qty","Net Qty","Basic Customs Duty"),
+            "Logistics":            _idx("Shipment ID","Transporter Name","Logistics cost","Logistics Provision","Total Logistics Cost","Cost/Kg."),
+            "Debit Notes (DN)":     _idx("Shipment ID","Debit Note No.","Debit Note Date.","Debit Note No. 2","Debit Note Date. 2","Actual Debit Note","Provision for DN","Total Cost"),
+            "Sales + Credit Notes": _idx("Shipment ID","Inv. No.","Buyer Name","Qty(Kg)","Amount","Credit Note No:1","CN Date. No:1","Credit Note No:2","CN Date. No:2","Actual Credit Note"),
+            "Profitability":        _idx("Shipment ID","Amount","Actual Credit Note","Net Revenue","Total Cost","Margin","Margin (%)","Margin Bucket","Reamrks - Margin","LMI @ Inception"),
+            "Financials with GST":  _idx("Shipment ID","Sales ","Purchases","Credit Note","Debit Note","Margin","Bill Branch","Inv Branch"),
+        }
+
+        tab_names = list(sections.keys())
+        tabs = st.tabs(tab_names)
+        for tab, (sec, idxs) in zip(tabs, sections.items()):
+            with tab:
+                st.dataframe(profit_df.iloc[:50, idxs], use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+        st.download_button(
+            "⬇ Download Full Profitability Report (CSV)",
+            profit_df.to_csv(index=False).encode(),
+            file_name="profitability_report.csv",
+            mime="text/csv",
+        )
+
+        # ── Category-wise Profitability Reports ──────────────────────────────
+        st.markdown("---")
+        st.markdown("### Category-wise Profitability Reports")
+        st.markdown(
+            "One report per **Broad Category**. Institutional Business is split into "
+            "**IB(B2B)** (Shipment ID starts with `SHID`) and **IB(Warehouse)** (the rest)."
+        )
+
+        cat_dfs = reports.split_by_category(profit_df)
+        if not cat_dfs:
+            st.info("No categories found in the data.")
+        else:
+            # Summary of categories
+            cat_summary = pd.DataFrame([
+                {"Report": name,
+                 "Rows": len(df),
+                 "Total Margin": round(float(df.iloc[:, 65].sum()), 2)}
+                for name, df in cat_dfs.items()
+            ])
+            st.dataframe(cat_summary, use_container_width=True, hide_index=True)
+
+            def _display_safe(df):
+                """Dedupe column names for st.dataframe (Arrow can't render duplicates)."""
+                seen, new_cols = {}, []
+                for c in df.columns:
+                    if c in seen:
+                        seen[c] += 1
+                        new_cols.append(f"{c} ({seen[c]})")
+                    else:
+                        seen[c] = 1
+                        new_cols.append(c)
+                out = df.copy()
+                out.columns = new_cols
+                return out
+
+            cat_tabs = st.tabs(list(cat_dfs.keys()))
+            for tab, (name, cdf) in zip(cat_tabs, cat_dfs.items()):
+                with tab:
+                    st.caption(f"{len(cdf):,} rows · Margin ₹{cdf.iloc[:, 65].sum():,.0f}")
+                    st.dataframe(_display_safe(cdf.head(50)), use_container_width=True, hide_index=True)
+                    safe = name.replace("(", "_").replace(")", "").replace("/", "-")
+                    st.download_button(
+                        f"⬇ Download {name} (CSV)",
+                        cdf.to_csv(index=False).encode(),
+                        file_name=f"profitability_{safe}.csv",
+                        mime="text/csv",
+                        key=f"dl_cat_{name}",
+                    )
+
+            st.download_button(
+                "⬇ Download ALL Category Reports (Excel — one sheet per category)",
+                reports.category_reports_excel(cat_dfs),
+                file_name="profitability_by_category.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE 5: Summary Report
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "Summary Report":
+    st.title("📋 Management Summary Report")
+
+    with st.spinner("Preparing data..."):
+        _auto_pipeline()
+
+    profit_df = db.read_table("Merged", "profitability")
+    if "_source_file" in profit_df.columns:
+        profit_df = profit_df.drop(columns=["_source_file"])
+
+    if profit_df.empty:
+        st.warning("No data found. Please upload files on the **Upload Files** page first.")
+    else:
+        st.markdown(
+            "Monthly summary per **Broad Category** — Quantity & Sales from the buyer "
+            "(invoice) side. `Net Margin = Gross Margin − Transportation Charges − Operational Cost`."
+        )
+
+        ar_df = db.read_table("AR", "raw").drop(columns=["_source_file"], errors="ignore")
+        ap_df = db.read_table("AP", "raw").drop(columns=["_source_file"], errors="ignore")
+        op_bills = db.load_older_bills()   # comprehensive bills (incl. CFSO-blank) for op-cost
+        summaries = reports.summaries_by_category(
+            profit_df,
+            ar_df if not ar_df.empty else None,
+            ap_df if not ap_df.empty else None,
+            op_cost_bills=op_bills if not op_bills.empty else None,
+        )
+        # ── FREEZE closed months from the per-vertical report files ──────────
+        # The MIS export only carries current open invoices, so closed months
+        # (Apr, May, …) come straight from the manual's own per-vertical
+        # "Profitability Report … till <date>" files sitting in this folder.
+        # Only the latest/open month is computed live.
+        try:
+            import frozen as _frozen
+            _app_dir = str(db.DB_DIR.parent)          # the AUTOMATION folder
+            _pdates = pd.to_datetime(profit_df.iloc[:, 2], errors="coerce")
+            _open_m = _pdates.max().strftime("%b-%y") if _pdates.notna().any() else None
+            summaries = _frozen.apply_frozen(summaries, _app_dir, _open_m)
+            _frozen_tabs = sorted(set(_frozen.latest_files(_app_dir)))
+            if _frozen_tabs and _open_m:
+                _cutoff = _pdates.max().strftime("%d-%b-%Y")
+                st.caption(
+                    f"🔒 Closed months are frozen from the per-vertical report files "
+                    f"(found: {', '.join(_frozen_tabs)}); **{_open_m} is live from MIS "
+                    f"data up to {_cutoff}** — upload a newer MIS for a fuller month.")
+        except Exception as _fe:
+            st.caption(f"⚠ Frozen-month overlay skipped: {_fe}")
+        # give Recy (the assistant) the current numbers to answer data questions
+        st.session_state["_recy_summaries"] = summaries
+
+        sum_tabs = st.tabs(list(summaries.keys()))
+        for tab, (name, sdf) in zip(sum_tabs, summaries.items()):
+            with tab:
+                if sdf.shape[1] <= 2 and len(profit_df) and sdf.iloc[0, -1] == 0:
+                    st.info("No data in this category yet.")
+                st.dataframe(sdf, use_container_width=True, hide_index=True, height=640)
+                safe = name.replace("(", "_").replace(")", "").replace("/", "-").replace(" ", "_")
+                # Per-vertical combined workbook (Summary + Receivables + Payables +
+                # Report). The 'All Categories' tab has NO per-tab button — the single
+                # "Download ALL Verticals" button below covers it (avoids duplication).
+                if name != "All Categories":
+                    st.download_button(
+                        f"⬇ Download {name} (Excel — Summary · Receivables · Payables · Report)",
+                        reports.combined_workbook(summaries, profit_df,
+                                                  ar_df if not ar_df.empty else None,
+                                                  ap_df if not ap_df.empty else None,
+                                                  vertical=name),
+                        file_name=f"profitability_{safe}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key=f"dl_comb_{name}",
+                    )
+
+        st.markdown("---")
+        st.download_button(
+            "⬇ Download ALL Verticals (Excel — Summary · Receivables · Payables · Report)",
+            reports.combined_workbook(summaries, profit_df,
+                                      ar_df if not ar_df.empty else None,
+                                      ap_df if not ap_df.empty else None),
+            file_name="profitability_all.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+        # ── Email the report to the team ──────────────────────────────────────
+        st.markdown("---")
+        st.markdown("### 📧 Send to team")
+        import mailer as _mailer
+        _cfg = _mailer.get_email_config()
+        if not _mailer.is_configured():
+            st.info(
+                "Email isn't set up yet. Add your Gmail **sender** + **App Password** to "
+                "`.streamlit/secrets.toml` under an `[email]` section to enable sending "
+                "(App Password: Google Account → Security → 2-Step Verification → App passwords)."
+            )
+        # period line for the mail body — "April 1, 2026 and July 2, 2026"
+        _pd_all = pd.to_datetime(profit_df.iloc[:, 2], errors="coerce")
+        _p_to = _pd_all.max()
+        _p_from = pd.Timestamp(_p_to.year if _p_to.month >= 4 else _p_to.year - 1, 4, 1) \
+            if pd.notna(_p_to) else None
+        _period = (f"{_p_from.strftime('%B %#d, %Y')} and {_p_to.strftime('%B %#d, %Y')}"
+                   if _p_from is not None else "the period")
+
+        _to = st.text_input("Recipients (comma-separated)",
+                            value=", ".join(_cfg.get("recipients", [])), key="mail_to")
+        _subj = st.text_input("Subject", value="Marketplace Profitability Report", key="mail_subj")
+        _body = st.text_area(
+            "Message (the summary table is added below this automatically)",
+            value=(f"Dear Team,\n\nPlease find the attached Marketplace Profitability "
+                   f"Report for the transactions between {_period}."),
+            key="mail_body", height=100)
+        _per_vertical = st.checkbox(
+            "Send a separate email per vertical (one attachment each)", key="mail_perv",
+            help="One email per vertical — its summary table in the body and only that "
+                 "vertical's workbook attached. Per-vertical recipient lists from secrets "
+                 "are used when set; otherwise the recipients above.")
+
+        def _mail_html(vert_label, body_text):
+            intro = body_text.replace("\n", "<br>")
+            # top-5 materials of the vertical's latest data month — recomputed
+            # from the live data every run, like the manual mails
+            try:
+                _mat, _mm, _msh = reports.top_materials(profit_df, vert_label)
+                _extra = _mailer.materials_html(_mat, _mm, _msh) if _mat is not None else ""
+            except Exception:
+                _extra = ""
+            return _mailer.summary_html(summaries[vert_label], vert_label, intro,
+                                        regards="Regards,<br>Profitability Automation Engine",
+                                        extra_html=_extra)
+
+        def _send_all(rcpts_map=None, only_to=None):
+            """Send per-vertical (rcpts_map) or one combined mail (only_to)."""
+            _rbv = _cfg.get("recipients_by_vertical", {})
+            _base_to = [x.strip() for x in _to.split(",") if x.strip()]
+            results = []
+            if _per_vertical:
+                for _v in summaries.keys():
+                    if _v == "All Categories":
+                        continue
+                    _wb = reports.combined_workbook(
+                        summaries, profit_df,
+                        ar_df if not ar_df.empty else None,
+                        ap_df if not ap_df.empty else None, vertical=_v)
+                    _rcpts = only_to or _rbv.get(_v, _base_to)
+                    _safe = _v.replace("(", "_").replace(")", "").replace("/", "-").replace(" ", "_")
+                    _vbody = _body.replace("Profitability Report", f"Profitability Report - {_v}")
+                    _ok, _msg = _mailer.send_report(
+                        _rcpts, f"{_subj} — {_v}", _vbody, _wb,
+                        f"profitability_{_safe}.xlsx", _cfg, html=_mail_html(_v, _vbody))
+                    results.append(f"{'✅' if _ok else '❌'} {_v}: {_msg}")
+            else:
+                _wb = reports.combined_workbook(
+                    summaries, profit_df,
+                    ar_df if not ar_df.empty else None,
+                    ap_df if not ap_df.empty else None)
+                _ok, _msg = _mailer.send_report(
+                    only_to or _base_to, _subj, _body, _wb, "profitability_all.xlsx",
+                    _cfg, html=_mail_html("All Categories", _body))
+                results.append(("✅ " if _ok else "❌ ") + _msg)
+            return results
+
+        _c1, _c2 = st.columns([1, 1])
+        with _c1:
+            if st.button("📨 Send report", key="mail_send", disabled=not _mailer.is_configured()):
+                with st.spinner("Sending…"):
+                    st.write("\n".join(_send_all()))
+        with _c2:
+            if st.button("🧪 Send test to myself", key="mail_test",
+                         disabled=not _mailer.is_configured(),
+                         help="Sends the exact same email(s) ONLY to the sender address — "
+                              "check your own inbox before mailing the team."):
+                with st.spinner("Sending test…"):
+                    st.write("\n".join(_send_all(only_to=[_cfg.get("sender", "")])))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE 6: Management Reports
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "Management Reports":
+    st.title("📈 Management Reports")
+
+    # ── Auto-run full pipeline if not yet done ───────────────────────────────
+    with st.spinner("Preparing data..."):
+        _auto_pipeline()
+
+    # ── Load profitability table ──────────────────────────────────────────────
+    profit_df = db.read_table("Merged", "profitability")
+    if "_source_file" in profit_df.columns:
+        profit_df = profit_df.drop(columns=["_source_file"])
+
+    if profit_df.empty:
+        st.warning("No data found. Please upload a file on the **Upload Files** page first.")
+    else:
+        # ── Executive KPIs header ─────────────────────────────────────────────
+        kpis = reports.executive_kpis(profit_df)
+        st.markdown("### Executive Summary")
+        k_cols = st.columns(4)
+        kpi_items = list(kpis.items())
+        for i, (label, val) in enumerate(kpi_items[:4]):
+            with k_cols[i]:
+                if "₹" in label:
+                    st.metric(label, f"₹{val:,.0f}")
+                elif "%" in label:
+                    st.metric(label, f"{val:.2f}%")
+                else:
+                    st.metric(label, f"{val:,.0f}" if isinstance(val, (int, float)) else val)
+        k_cols2 = st.columns(5)
+        for i, (label, val) in enumerate(kpi_items[4:]):
+            with k_cols2[i]:
+                if "₹" in label:
+                    st.metric(label, f"₹{val:,.0f}")
+                elif "%" in label:
+                    st.metric(label, f"{val:.2f}%")
+                else:
+                    st.metric(label, f"{val:,.0f}" if isinstance(val, (int, float)) else val)
+
+        st.markdown("---")
+
+        # ── Report tabs ───────────────────────────────────────────────────────
+        (
+            tab_sup, tab_buy, tab_mat,
+            tab_mon, tab_wk, tab_bucket,
+            tab_rank
+        ) = st.tabs([
+            "🏭 Supplier-wise",
+            "🛒 Buyer-wise",
+            "📦 Material-wise",
+            "📅 Monthly",
+            "📆 Weekly",
+            "📊 Margin Buckets",
+            "🏆 Rankings",
+        ])
+
+        # ── Supplier-wise ─────────────────────────────────────────────────────
+        with tab_sup:
+            st.subheader("Supplier-wise Profitability")
+            sup_df = reports.supplier_summary(profit_df)
+            st.dataframe(sup_df, use_container_width=True, hide_index=True)
+            # Highlight best/worst
+            c1, c2, c3 = st.columns(3)
+            if not sup_df.empty:
+                best   = sup_df.iloc[0]
+                worst  = sup_df.iloc[-1]
+                c1.metric("Best Margin Supplier",  best["Supplier"],  f"₹{best['Margin']:,.0f}")
+                c2.metric("Worst Margin Supplier", worst["Supplier"], f"₹{worst['Margin']:,.0f}")
+                c3.metric("Total Suppliers", len(sup_df))
+            st.download_button("⬇ Download Supplier Summary",
+                               sup_df.to_csv(index=False).encode(),
+                               file_name="supplier_summary.csv", mime="text/csv")
+
+        # ── Buyer-wise ────────────────────────────────────────────────────────
+        with tab_buy:
+            st.subheader("Buyer-wise Profitability")
+            buy_df = reports.buyer_summary(profit_df)
+            st.dataframe(buy_df, use_container_width=True, hide_index=True)
+            c1, c2, c3 = st.columns(3)
+            if not buy_df.empty:
+                best  = buy_df.iloc[0]
+                worst = buy_df.iloc[-1]
+                c1.metric("Best Margin Buyer",  best["Buyer"],  f"₹{best['Margin']:,.0f}")
+                c2.metric("Worst Margin Buyer", worst["Buyer"], f"₹{worst['Margin']:,.0f}")
+                c3.metric("Total Buyers", len(buy_df))
+            st.download_button("⬇ Download Buyer Summary",
+                               buy_df.to_csv(index=False).encode(),
+                               file_name="buyer_summary.csv", mime="text/csv")
+
+        # ── Material-wise ─────────────────────────────────────────────────────
+        with tab_mat:
+            st.subheader("Material-wise Profitability")
+            mat_df = reports.material_summary(profit_df)
+            st.dataframe(mat_df, use_container_width=True, hide_index=True)
+            c1, c2 = st.columns(2)
+            c1.metric("Total Materials", len(mat_df))
+            if not mat_df.empty:
+                top_mat = mat_df.iloc[0]
+                c2.metric("Best Material", top_mat["Material"], f"₹{top_mat['Margin']:,.0f}")
+            st.download_button("⬇ Download Material Summary",
+                               mat_df.to_csv(index=False).encode(),
+                               file_name="material_summary.csv", mime="text/csv")
+
+        # ── Monthly ───────────────────────────────────────────────────────────
+        with tab_mon:
+            st.subheader("Monthly Profitability")
+            mon_df = reports.monthly_summary(profit_df)
+            st.dataframe(mon_df, use_container_width=True, hide_index=True)
+            if not mon_df.empty:
+                best_m  = mon_df.loc[mon_df["Margin"].idxmax()]
+                worst_m = mon_df.loc[mon_df["Margin"].idxmin()]
+                c1, c2 = st.columns(2)
+                c1.metric("Best Month",  f"{best_m['Month_mmm_yy']} ({best_m['Quarter']})",
+                          f"₹{best_m['Margin']:,.0f}")
+                c2.metric("Worst Month", f"{worst_m['Month_mmm_yy']} ({worst_m['Quarter']})",
+                          f"₹{worst_m['Margin']:,.0f}")
+            st.download_button("⬇ Download Monthly Summary",
+                               mon_df.to_csv(index=False).encode(),
+                               file_name="monthly_summary.csv", mime="text/csv")
+
+        # ── Weekly ────────────────────────────────────────────────────────────
+        with tab_wk:
+            st.subheader("Weekly Profitability")
+            wk_df = reports.weekly_summary(profit_df)
+            st.dataframe(wk_df, use_container_width=True, hide_index=True)
+            if not wk_df.empty:
+                best_w = wk_df.loc[wk_df["Margin"].idxmax()]
+                c1, c2 = st.columns(2)
+                c1.metric("Best Week", f"Week {int(best_w['Week_No'])}", f"₹{best_w['Margin']:,.0f}")
+                c2.metric("Total Weeks", len(wk_df))
+            st.download_button("⬇ Download Weekly Summary",
+                               wk_df.to_csv(index=False).encode(),
+                               file_name="weekly_summary.csv", mime="text/csv")
+
+        # ── Margin Buckets ────────────────────────────────────────────────────
+        with tab_bucket:
+            st.subheader("Margin Bucket Distribution")
+            bkt_df = reports.margin_bucket_summary(profit_df)
+            st.dataframe(bkt_df, use_container_width=True, hide_index=True)
+            c1, c2, c3 = st.columns(3)
+            for col_w, row in zip([c1, c2, c3], bkt_df.itertuples()):
+                col_w.metric(
+                    row.Margin_Bucket if hasattr(row, "Margin_Bucket") else str(row[1]),
+                    f"{row.Shipments} shipments",
+                    f"₹{row.Margin:,.0f} ({row._6:.2f}%)" if hasattr(row, '_6') else ""
+                )
+
+        # ── Rankings ──────────────────────────────────────────────────────────
+        with tab_rank:
+            st.subheader("Top / Bottom Rankings")
+            n_rank = st.slider("Show Top / Bottom N", 3, 20, 5)
+            rankings = reports.top_n_rankings(profit_df, n=n_rank)
+
+            r1, r2 = st.columns(2)
+            with r1:
+                st.markdown(f"#### 🥇 Top {n_rank} Suppliers — Margin")
+                st.dataframe(rankings["top_suppliers_margin"], use_container_width=True, hide_index=True)
+                st.markdown(f"#### 📉 Bottom {n_rank} Suppliers — Margin")
+                st.dataframe(rankings["worst_suppliers_margin"], use_container_width=True, hide_index=True)
+                st.markdown(f"#### 📦 Top {n_rank} Suppliers — Volume")
+                st.dataframe(rankings["top_suppliers_volume"], use_container_width=True, hide_index=True)
+            with r2:
+                st.markdown(f"#### 🥇 Top {n_rank} Buyers — Margin")
+                st.dataframe(rankings["top_buyers_margin"], use_container_width=True, hide_index=True)
+                st.markdown(f"#### 📦 Top {n_rank} Buyers — Volume")
+                st.dataframe(rankings["top_buyers_volume"], use_container_width=True, hide_index=True)
+                st.markdown(f"#### 🔬 Top {n_rank} Materials — Margin")
+                st.dataframe(rankings["top_materials_margin"], use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+        # ── Download All Reports in one ZIP ──────────────────────────────────
+        import zipfile, io as _io
+        def _make_zip():
+            buf = _io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("supplier_summary.csv",  reports.supplier_summary(profit_df).to_csv(index=False))
+                zf.writestr("buyer_summary.csv",     reports.buyer_summary(profit_df).to_csv(index=False))
+                zf.writestr("material_summary.csv",  reports.material_summary(profit_df).to_csv(index=False))
+                zf.writestr("monthly_summary.csv",   reports.monthly_summary(profit_df).to_csv(index=False))
+                zf.writestr("weekly_summary.csv",    reports.weekly_summary(profit_df).to_csv(index=False))
+                zf.writestr("margin_buckets.csv",    reports.margin_bucket_summary(profit_df).to_csv(index=False))
+            buf.seek(0)
+            return buf.read()
+
+        st.download_button(
+            "⬇ Download All Reports (ZIP)",
+            _make_zip(),
+            file_name="management_reports.zip",
+            mime="application/zip",
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE 6: Query Data
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "Query Data":
+    st.title("Query Data")
+    status = db.all_db_status()
+    loaded = {s: v for s, v in status.items() if v["exists"]}
+
+    if not loaded:
+        st.info("No data yet. Upload a file on the **Upload Files** page.")
+    else:
+        sheet_sel = st.selectbox("Choose Sheet", list(loaded.keys()))
+        tables = db.list_tables(sheet_sel)
+        if not tables:
+            st.info("No tables available for this sheet.")
+        else:
+            tbl_sel = st.selectbox("Choose Table", tables)
+            df_query = db.read_table(sheet_sel, tbl_sel).drop(columns=["_source_file"], errors="ignore")
+
+            # Simple filter UI
+            st.caption(f"{len(df_query):,} rows · {len(df_query.columns)} columns")
+            filter_col = st.selectbox("Filter column (optional)", ["— none —"] + list(df_query.columns))
+            if filter_col != "— none —":
+                vals = df_query[filter_col].dropna().unique().tolist()
+                chosen = st.multiselect(f"Keep values for {filter_col}", vals, default=vals)
+                df_query = df_query[df_query[filter_col].isin(chosen)]
+
+            st.dataframe(df_query, use_container_width=True, hide_index=True)
+            st.download_button("Download CSV", df_query.to_csv(index=False).encode(),
+                               file_name=f"{sheet_sel}_{tbl_sel}.csv", mime="text/csv")

@@ -64,9 +64,51 @@ SCOPE — 7 verticals automated: End Generator (a.k.a. Metal in the tool), Plast
 Re-Commerce, ITAD, AFR, M4, Enterprise (IB B2B). OUT OF SCOPE: ReWerse and the
 Processing Center (IB Warehouse) — handled manually.
 
+THE FREEZE (why closed months never change): the Zoho MIS export is ROLLING — it
+only carries recent invoices — so closed months (Apr, May, …) are read from the
+manual "Profitability Report of <vertical> till DD-MM-YYYY.xlsx" files kept in the
+app folder (newest per vertical, auto-detected). Only FULLY covered months freeze:
+a "till 21-06" file freezes Apr & May but NOT its partial June. The open month is
+always computed live from the uploaded MIS. FY Total = frozen priors + live open
+month; Receivable/Payable are BALANCES, so the open-month column and FY show the
+live as-of-today figure (not a sum of months). If a closed month looks empty or
+understated, the usual cause is a missing/outdated "till" file for that vertical.
+
+UNITS: quantity displays in MT (Kg ÷ 1000) for all verticals EXCEPT IT AD and
+Re-Commerce, which genuinely count units. Per-kg rows always use Kg.
+
+MP RULE: shipments whose SO starts with MP — including prefixed forms like
+"36/MPPET/…" or "MP/AFR/…" — are warehouse/internal movements, excluded from every
+vertical except Re-Commerce (whose MP sales are real, costed from older bills).
+They appear in a separate "Warehouse (MP)" detail report.
+
+ACCUMULATED DETAILS: every MIS upload's computed line rows are stored permanently
+(persistent store, upserted by shipment+invoice) — so months that drop out of
+Zoho's rolling export stay in the Profitability Report sheet, and a late CN/DN
+that reappears with its shipment replaces the old row with the newest state.
+
 DOWNLOADS: each vertical (and "All") downloads as ONE Excel with 4 sheets —
-Summary, Receivables, Payables, Profitability Report. There's also a "Send to team"
-button that emails the report (optionally one email per vertical).
+Summary, Receivables, Payables, Profitability Report (whole FY: closed-month rows
+from the manual files' Details sheets + live rows from the accumulated store; no
+month is double-counted, so summing the sheet cross-checks the FY Total).
+
+EMAIL: "Send to team" sends the report — summary table + top-5 materials of the
+latest data month inline (Indian number format), workbook attached; optionally one
+email per vertical. "Send test to myself" sends the same mails only to the sender.
+Credentials live in .streamlit/secrets.toml ([email] sender + Gmail App Password).
+
+HOSTING MODEL (Streamlit Cloud): each visitor gets an ISOLATED session — one
+person's upload isn't visible to another. The persistent stores are shared but the
+hosted disk RESETS to the GitHub repo baseline on restart — so permanent changes
+(new month's "till" files, refreshed stores) must be committed & pushed to the
+private repo; "Reboot app" on share.streamlit.io restores the baseline (undo for
+any messed-up hosted state). Daily MIS uploads are transient by design.
+
+KNOWN DATA GOTCHAS (tell users when relevant): Zoho exports mutate — columns get
+renamed, header rows move, SO numbers grow prefixes. Stray documents can sit in
+the sales export: DN-series invoice numbers ("…27DN…"), OFF-type sales orders —
+if a dead vertical suddenly shows sales, check for these. Editing a .py file needs
+a full app restart (Streamlit reruns only app.py).
 
 If a question is about specific numbers, use the LIVE DATA snapshot provided.
 If you don't know something, say so briefly. Never invent numbers.
@@ -75,6 +117,18 @@ STYLE: be genuinely helpful and COMPLETE — never stop mid-sentence. Keep it ti
 (usually 2–4 sentences, or short bullets). Lead with the answer, then a crisp reason.
 Warm and a little playful, but don't waste words. Use at most one emoji.
 """
+
+
+def _load_guide() -> str:
+    """Feed the maintainer guide into Recy's context so its knowledge tracks the
+    docs — update MAINTAINER_GUIDE.md and Recy learns it on the next question."""
+    try:
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "MAINTAINER_GUIDE.md")
+        with open(p, encoding="utf-8") as f:
+            return ("\n\nREFERENCE — the project's maintainer guide (rule map, "
+                    "troubleshooting playbook, change recipes):\n" + f.read())
+    except Exception:
+        return ""
 
 
 def get_api_key() -> str | None:
@@ -123,7 +177,7 @@ def ask(question: str, summaries: dict | None = None, history: list | None = Non
     if not key:
         return ("I'm not switched on yet — add a Gemini API key to `.streamlit/secrets.toml` "
                 "under `[gemini] api_key = \"…\"` and I'll come alive. 🤖")
-    prompt = APP_KNOWLEDGE + "\n\n" + build_data_context(summaries)
+    prompt = APP_KNOWLEDGE + _load_guide() + "\n\n" + build_data_context(summaries)
     if app_state:
         prompt += "\n\n" + app_state
     if history:
@@ -139,6 +193,11 @@ def ask(question: str, summaries: dict | None = None, history: list | None = Non
     for attempt in range(2):
         try:
             resp = requests.post(url, json=payload, timeout=(5, 60))
+            if resp.status_code in (500, 502, 503, 529):   # transient — retry once
+                last_err = f"Gemini {resp.status_code}"
+                import time as _t
+                _t.sleep(2)
+                continue
             if resp.status_code != 200:
                 return f"(Gemini error {resp.status_code}: {resp.text[:150]})"
             data = resp.json()
@@ -148,6 +207,9 @@ def ask(question: str, summaries: dict | None = None, history: list | None = Non
             continue          # transient — try once more
         except Exception as e:
             return f"(Couldn't reach Gemini: {e})"
+    if isinstance(last_err, str) and "Gemini" in str(last_err):
+        return ("Google's Gemini servers are overloaded right now (temporary spike "
+                "on their side, not our app). Try again in a minute. 🤖")
     return ("Hmm, I couldn't reach Gemini just now — the connection timed out twice. "
             "That's usually a slow network or VPN/proxy hiccup, not the app. "
             "Give it another go in a moment. 🤖")

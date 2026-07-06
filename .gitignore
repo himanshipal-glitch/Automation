@@ -27,7 +27,6 @@
 
 # explicit re-blocks (belt & braces even in whitelist mode)
 secrets.toml
-persistent/
 databases/
 __pycache__/
 *.xlsx
@@ -46,3 +45,14 @@ detector.py
 !requirements.txt
 desktop.ini
 ~$*
+
+# ── baseline data for the hosted app ──────────────────────────────────────────
+# Company-approved (06-07-2026): the private repo doubles as the data baseline
+# for Streamlit Cloud (its disk resets on redeploy). Persistent stores + the
+# manual per-vertical report files (freeze source) ship with the app.
+# Monthly maintenance: drop the new "till DD-MM" files here, commit, push.
+!persistent/
+persistent/*
+!persistent/*.parquet
+!persistent/*.pkl
+!Profitability Report of *.xlsx

@@ -9,6 +9,7 @@
 !requirements.txt
 
 # docs (text only — PDFs/DOCX/screenshots may embed real figures)
+!README.md
 !CLAUDE.md
 !MAINTAINER_GUIDE.md
 !USER_SOP.md

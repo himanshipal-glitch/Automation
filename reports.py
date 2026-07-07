@@ -292,34 +292,6 @@ def _bal_sum(df: pd.DataFrame | None, month: str | None,
     return float(bal.sum())
 
 
-def _old_bal(df: pd.DataFrame | None, fy_start, exclude_legacy: bool = False) -> float:
-    """Open balance of documents dated BEFORE the FY start ('Old' receivable/
-    payable). For receivables the legacy-customer rule applies: long-overdue
-    defaulter accounts are excluded, same list the Net Receivable uses."""
-    if df is None or getattr(df, "empty", True) or fy_start is None:
-        return 0.0
-    bal_col  = next((c for c in df.columns if "balance" in str(c).lower()), None)
-    date_col = next((c for c in df.columns if str(c).lower() == "date"), None)
-    if bal_col is None or date_col is None:
-        return 0.0
-    bal = pd.to_numeric(df[bal_col], errors="coerce").fillna(0)
-    dts = pd.to_datetime(df[date_col], errors="coerce")
-    mask = dts.notna() & (dts < fy_start)
-    if exclude_legacy:
-        cust_col = next((c for c in df.columns if "customer_name" in str(c).lower()
-                         or "customer name" in str(c).lower()), None)
-        if cust_col is not None:
-            try:
-                import receivables as _rcv
-                _names = [n for names in _rcv.LEGACY_CUSTOMERS.values() for n in names]
-                cu = df[cust_col].astype(str).str.upper()
-                legacy = cu.apply(lambda x: any(n in x for n in _names))
-                mask &= ~legacy
-            except Exception:
-                pass
-    return float(bal[mask].sum())
-
-
 def _summary_block(w: pd.DataFrame, recv: float, pay: float, wd: float = 30,
                    oc_override: float | None = None,
                    qty_in_mt: bool = True) -> list:
@@ -472,9 +444,6 @@ def summary_report(profit_df: pd.DataFrame,
 
     data = {"Metric": SUMMARY_METRICS}
     _ocm = op_cost_by_month or {}
-    # Old (pre-FY) balances are constants — the documents predate every column.
-    _old_r = _old_bal(ar_df, fy_start, exclude_legacy=True)
-    _old_p = _old_bal(ap_df, fy_start)
     for m in months:
         # recv_override is a single point-in-time net (legacy+unused+prefix rule);
         # apply it to the LATEST month only (it's a current snapshot), leave history
@@ -488,12 +457,15 @@ def summary_report(profit_df: pd.DataFrame,
                               wd=_working_days(m),
                               oc_override=(_ocm.get(m) if _ocm else None),
                               qty_in_mt=qty_in_mt)
-        # bifurcation rows — same balance math, split by invoice date at 1-Apr,
-        # slotted directly under their parent Receivables/Payable rows
+        # bifurcation rows, slotted under their parents:
+        #   FY 27 = FY-dated open balance (invoice date ≥ 1-Apr, cumulative)
+        #   Old   = parent row − FY 27  (so the split always ties to the total)
+        _f27r = round(_bal_sum(ar_df, m, fy_start), 0)
+        _f27p = round(_bal_sum(ap_df, m, fy_start), 0)
         data[m] = (_blk[:16]
-                   + [round(_bal_sum(ar_df, m, fy_start), 0), round(_old_r, 0)]
+                   + [_f27r, round(float(_rv or 0) - _f27r, 0)]
                    + _blk[16:18]
-                   + [round(_bal_sum(ap_df, m, fy_start), 0), round(_old_p, 0)]
+                   + [_f27p, round(float(_pv or 0) - _f27p, 0)]
                    + _blk[18:])
 
     # FY working days = total days from FY start to the global cutoff (not summed)
@@ -504,10 +476,14 @@ def summary_report(profit_df: pd.DataFrame,
                           wd=fy_wd,
                           oc_override=(sum(_ocm.values()) if _ocm else None),
                           qty_in_mt=qty_in_mt)
+    _f27r_fy = round(_bal_sum(ar_df, None, fy_start), 0)
+    _f27p_fy = round(_bal_sum(ap_df, None, fy_start), 0)
+    _rv_fy = recv_override if recv_override is not None else _bal_sum(ar_df, None, fy_start)
+    _pv_fy = pay_override if pay_override is not None else _bal_sum(ap_df, None, fy_start)
     data["FY Total"] = (_fyb[:16]
-                        + [round(_bal_sum(ar_df, None, fy_start), 0), round(_old_r, 0)]
+                        + [_f27r_fy, round(float(_rv_fy or 0) - _f27r_fy, 0)]
                         + _fyb[16:18]
-                        + [round(_bal_sum(ap_df, None, fy_start), 0), round(_old_p, 0)]
+                        + [_f27p_fy, round(float(_pv_fy or 0) - _f27p_fy, 0)]
                         + _fyb[18:])
 
     return pd.DataFrame(data)

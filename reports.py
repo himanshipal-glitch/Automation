@@ -816,6 +816,16 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
             _rep["Row Source"] = "Live (MIS)"
         _rep.to_excel(w, sheet_name="Profitability Report", index=False)
 
+        # ── Sheets 5 & 6: Supplier / Buyer metrics — computed over the SAME
+        # whole-FY rows as the Profitability Report sheet, so party totals
+        # reconcile against it. Includes each party's GSTIN + materials dealt.
+        try:
+            _mrep = _rep.drop(columns=["Row Source"], errors="ignore")
+            supplier_summary(_mrep).to_excel(w, sheet_name="Supplier Metrics", index=False)
+            buyer_summary(_mrep).to_excel(w, sheet_name="Buyer Metrics", index=False)
+        except Exception:
+            pass    # metrics are additive extras — never block the workbook
+
     buf.seek(0)
     return buf.read()
 
@@ -995,15 +1005,33 @@ def _extract_key_cols(df: pd.DataFrame) -> pd.DataFrame:
 # 1. SUPPLIER-WISE SUMMARY
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _first_text(s) -> str:
+    """First non-blank value (used for a party's GSTIN)."""
+    for x in s:
+        t = str(x).strip()
+        if t and t.lower() not in ("nan", "none", "0", "0.0"):
+            return t
+    return ""
+
+
+def _uniq_join(s) -> str:
+    """Unique, sorted, comma-joined values (the materials a party deals in)."""
+    vals = sorted({str(x).strip() for x in s
+                   if str(x).strip() and str(x).strip().lower() not in ("nan", "none")})
+    return ", ".join(vals)
+
+
 def supplier_summary(df: pd.DataFrame) -> pd.DataFrame:
     """
     Aggregate by Supplier Name.
-    Columns: Supplier, Shipments, Total_Qty_Kg, Purchase_Price, Logistics_Cost,
-             Total_Cost, Net_Revenue, Margin, Margin_%, Avg_Cost_Kg
+    Columns: Supplier, GSTIN, Shipments, Total_Qty_Kg, Purchase_Price,
+             Logistics_Cost, Total_Cost, Net_Revenue, Margin, Margin_%,
+             Avg_Cost_Kg, Materials
     """
     w = _extract_key_cols(df)
     grp = w.groupby("Supplier_Name")
     out = grp.agg(
+        GSTIN           = ("GST_Reg_No",     _first_text),
         Shipments       = ("Shipment_ID",    "count"),
         Total_Qty_Kg    = ("Qty_Kg_purch",   "sum"),
         Purchase_Price  = ("Purchase_Price", "sum"),
@@ -1011,6 +1039,7 @@ def supplier_summary(df: pd.DataFrame) -> pd.DataFrame:
         Total_Cost      = ("Total_Cost",     "sum"),
         Net_Revenue     = ("Net_Revenue",    "sum"),
         Margin          = ("Margin_BO",      "sum"),
+        Materials       = ("Material",       _uniq_join),
     ).reset_index()
     out.rename(columns={"Supplier_Name": "Supplier"}, inplace=True)
     out["Margin_%"]    = np.where(out["Net_Revenue"] != 0,
@@ -1021,7 +1050,8 @@ def supplier_summary(df: pd.DataFrame) -> pd.DataFrame:
     # Round numeric cols
     num_cols = ["Total_Qty_Kg","Purchase_Price","Logistics_Cost","Total_Cost","Net_Revenue","Margin"]
     out[num_cols] = out[num_cols].round(2)
-    return out
+    # keep the original column order — Materials goes last
+    return out[[c for c in out.columns if c != "Materials"] + ["Materials"]]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1036,12 +1066,14 @@ def buyer_summary(df: pd.DataFrame) -> pd.DataFrame:
     w = _extract_key_cols(df)
     grp = w.groupby("Buyer_Name")
     out = grp.agg(
+        GSTIN         = ("Buyer_GST",     _first_text),
         Shipments     = ("Shipment_ID",   "count"),
         Total_Qty_Kg  = ("Qty_Kg_sales",  "sum"),
         Amount_Sales  = ("Amount_sales",  "sum"),
         Net_Revenue   = ("Net_Revenue",   "sum"),
         Total_Cost    = ("Total_Cost",    "sum"),
         Margin        = ("Margin_BO",     "sum"),
+        Materials     = ("Material",      _uniq_join),
     ).reset_index()
     out.rename(columns={"Buyer_Name": "Buyer"}, inplace=True)
     out["Margin_%"] = np.where(out["Net_Revenue"] != 0,
@@ -1049,7 +1081,8 @@ def buyer_summary(df: pd.DataFrame) -> pd.DataFrame:
     out = out.sort_values("Margin", ascending=False).reset_index(drop=True)
     num_cols = ["Total_Qty_Kg","Amount_Sales","Net_Revenue","Total_Cost","Margin"]
     out[num_cols] = out[num_cols].round(2)
-    return out
+    # keep the original column order — Materials goes last
+    return out[[c for c in out.columns if c != "Materials"] + ["Materials"]]
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -1293,16 +1293,8 @@ elif page == "Summary Report":
 
         def _mail_html(vert_label, body_text):
             intro = body_text.replace("\n", "<br>")
-            # top-5 materials of the vertical's latest data month — recomputed
-            # from the live data every run, like the manual mails
-            try:
-                _mat, _mm, _msh = reports.top_materials(profit_df, vert_label)
-                _extra = _mailer.materials_html(_mat, _mm, _msh) if _mat is not None else ""
-            except Exception:
-                _extra = ""
             return _mailer.summary_html(summaries[vert_label], vert_label, intro,
-                                        regards="Regards,<br>Profitability Automation Engine",
-                                        extra_html=_extra)
+                                        regards="Regards,<br>Profitability Automation Engine")
 
         def _send_all(rcpts_map=None, only_to=None):
             """Send per-vertical (rcpts_map) or one combined mail (only_to)."""

@@ -34,15 +34,19 @@ _VERTICAL_MAP = [
 ]
 
 # money rows are rounded to 0, ratios/per-kg to 2, counts are ints, %-rows scale ×100
-_MONEY   = {0, 1, 2, 3, 5, 6, 20, 22}          # (0=Qty rounds to 2, handled below)
-_RATIO2  = {4, 7, 8, 9, 10, 21, 23}
+# Row indexes follow reports.SUMMARY_METRICS (28 rows):
+# …14=Full Rejection, 15=Receivables, 16=FY27 R, 17=Old R, 18=DSO,
+# 19=Payable, 20=FY27 P, 21=Old P, 22=DPO, 23=WC Days, 24=CN val, 25=CN%,
+# 26=DN val, 27=DN%
+_MONEY   = {0, 1, 2, 3, 5, 6, 24, 26}          # (0=Qty rounds to 2, handled below)
+_RATIO2  = {4, 7, 8, 9, 10, 25, 27}
 _COUNTS  = {11, 12, 13}
-_DAYS    = {16, 18, 19}
-_BALANCE = {15, 17}
-# FY balances stay live (latest month-end snapshot), never summed:
-_KEEP_LIVE_FY = {14, 15, 16, 17, 18, 19}
+_DAYS    = {18, 22, 23}
+_BALANCE = {15, 19}
+# FY balances/day rows (incl. the FY27/Old splits) stay live, never summed:
+_KEEP_LIVE_FY = {14, 15, 16, 17, 18, 19, 20, 21, 22, 23}
 # additive rows summed for the FY total:
-_ADDITIVE_FY = {0, 1, 2, 3, 5, 6, 11, 12, 13, 20, 22}
+_ADDITIVE_FY = {0, 1, 2, 3, 5, 6, 11, 12, 13, 24, 26}
 
 
 def _mkey(s) -> str:
@@ -74,14 +78,14 @@ def _metric_idx(label: str):
     if n.startswith("noofbuyers"):          return (13, 1)
     if n == "fullrejection":                return (14, 1)
     if n.startswith("receivable"):          return (15, 1)   # incl. "Receivable (Exl Legacy)"
-    if n.startswith("dso"):                 return (16, 1)
-    if n in ("payable", "payables"):        return (17, 1)
-    if n.startswith("dpo"):                 return (18, 1)
-    if n == "workingcapitaldays":           return (19, 1)
-    if "creditnotes" in n and "%" in n:     return (21, 100)
-    if "creditnotes" in n and "value" in n: return (20, 1)
-    if "debitnotes" in n and "%" in n:      return (23, 100)
-    if "debitnotes" in n and "value" in n:  return (22, 1)
+    if n.startswith("dso"):                 return (18, 1)
+    if n in ("payable", "payables"):        return (19, 1)
+    if n.startswith("dpo"):                 return (22, 1)
+    if n == "workingcapitaldays":           return (23, 1)
+    if "creditnotes" in n and "%" in n:     return (25, 100)
+    if "creditnotes" in n and "value" in n: return (24, 1)
+    if "debitnotes" in n and "%" in n:      return (27, 100)
+    if "debitnotes" in n and "value" in n:  return (26, 1)
     return None
 
 
@@ -273,8 +277,8 @@ def _aggregate_all(per: dict) -> dict:
         cell[8]  = round(sales / qty, 2) if qty else 0.0
         cell[9]  = round(pur / qty, 2) if qty else 0.0
         cell[10] = round(tc_abs / qty, 2) if qty else 0.0
-        cell[21] = round(100 * add[20] / sales, 2) if sales else 0.0
-        cell[23] = round(100 * add[22] / pur, 2) if pur else 0.0
+        cell[25] = round(100 * add[24] / sales, 2) if sales else 0.0
+        cell[27] = round(100 * add[26] / pur, 2) if pur else 0.0
         allc[m] = cell
     return allc
 
@@ -390,22 +394,22 @@ def _recompute_fy(df: pd.DataFrame, open_month: str | None, tab: str = "") -> No
 
     qty, sales, pur = S(0), S(1), S(2)
     gm, oc, nm = S(3), S(5), S(6)
-    cnv, dnv = S(20), S(22)
+    cnv, dnv = S(24), S(26)
     # qty is displayed in MT for weight verticals — per-kg maths needs Kg
     qkg = qty * (1 if tab in UNIT_TABS else 1000)
     tc_abs = sum(g(10, m) * g(0, m) * (1 if tab in UNIT_TABS else 1000) for m in use)
 
     fy = {
         0: round(qty, 2), 1: round(sales, 0), 2: round(pur, 0), 3: round(gm, 0),
-        5: round(oc, 0), 6: round(nm, 0), 20: round(cnv, 0), 22: round(dnv, 0),
+        5: round(oc, 0), 6: round(nm, 0), 24: round(cnv, 0), 26: round(dnv, 0),
         11: int(round(S(11))), 12: int(round(S(12))), 13: int(round(S(13))),
         4: round(100 * gm / sales, 2) if sales else 0.0,
         7: round(100 * nm / sales, 2) if sales else 0.0,
         8: round(sales / qkg, 2) if qkg else 0.0,
         9: round(pur / qkg, 2) if qkg else 0.0,
         10: round(tc_abs / qkg, 2) if qkg else 0.0,
-        21: round(100 * cnv / sales, 2) if sales else 0.0,
-        23: round(100 * dnv / pur, 2) if pur else 0.0,
+        25: round(100 * cnv / sales, 2) if sales else 0.0,
+        27: round(100 * dnv / pur, 2) if pur else 0.0,
     }
     for idx, val in fy.items():
         if idx not in _KEEP_LIVE_FY and 0 <= idx < len(df):
@@ -427,4 +431,4 @@ if __name__ == "__main__":
         for m in sorted(cols, key=lambda x: _mdt(x)):
             c = cols[m]
             print(f"  {m}: Sales={c.get(1):,.0f}  Purch={c.get(2):,.0f}  "
-                  f"GM={c.get(3):,.0f}  GM%={c.get(4)}  Recv={c.get(15)}  Pay={c.get(17)}")
+                  f"GM={c.get(3):,.0f}  GM%={c.get(4)}  Recv={c.get(15)}  Pay={c.get(19)}")

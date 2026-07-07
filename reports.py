@@ -238,20 +238,20 @@ SUMMARY_METRICS = [
     "No. of Buyers (Recyclers)",
     "Full Rejection",
     "Receivables (exl Legacy)",
+    # bifurcation by INVOICE date at the FY start (1-Apr) — display split only,
+    # the parent Receivables/Payable rows keep their original formulas
+    "FY 27 Receivables",
+    "Old Receivables (pre-Apr, exl Legacy)",
     "DSO (Days)",
     "Payable",
+    "FY 27 Payables",
+    "Old Payables (pre-Apr)",
     "DPO (Days)",
     "Working Capital Days",
     "Credit Notes (Value - Incl. Prov)",
     "Credit Notes (% to Revenue)",
     "Debit Notes (Value - Incl. Prov)",
     "Debit Notes (% to Purchase)",
-    # Receivable/Payable bifurcated by INVOICE date at the FY start (1-Apr).
-    # Display-only split — the original Receivables/Payable rows are unchanged.
-    "Old Receivables (pre-Apr, exl Legacy)",
-    "FY 27 Receivables",
-    "Old Payables (pre-Apr)",
-    "FY 27 Payables",
 ]
 
 
@@ -483,31 +483,32 @@ def summary_report(profit_df: pd.DataFrame,
               else _bal_sum(ar_df, m, fy_start)
         _pv = pay_override if (pay_override is not None and m == last_month) \
               else _bal_sum(ap_df, m, fy_start)
-        data[m] = _summary_block(w[w["_month"] == m],
-                                 _rv, _pv,
-                                 wd=_working_days(m),
-                                 oc_override=(_ocm.get(m) if _ocm else None),
-                                 qty_in_mt=qty_in_mt) + [
-            # bifurcation rows — same balance math, split by invoice date at 1-Apr
-            round(_old_r, 0),
-            round(_bal_sum(ar_df, m, fy_start), 0),   # FY-dated, cumulative to month-end
-            round(_old_p, 0),
-            round(_bal_sum(ap_df, m, fy_start), 0),
-        ]
+        _blk = _summary_block(w[w["_month"] == m],
+                              _rv, _pv,
+                              wd=_working_days(m),
+                              oc_override=(_ocm.get(m) if _ocm else None),
+                              qty_in_mt=qty_in_mt)
+        # bifurcation rows — same balance math, split by invoice date at 1-Apr,
+        # slotted directly under their parent Receivables/Payable rows
+        data[m] = (_blk[:16]
+                   + [round(_bal_sum(ar_df, m, fy_start), 0), round(_old_r, 0)]
+                   + _blk[16:18]
+                   + [round(_bal_sum(ap_df, m, fy_start), 0), round(_old_p, 0)]
+                   + _blk[18:])
 
     # FY working days = total days from FY start to the global cutoff (not summed)
     fy_wd = int((end_dt - fy_start).days) + 1 if (pd.notna(end_dt) and fy_start is not None) else 30
-    data["FY Total"] = _summary_block(w,
-                                      recv_override if recv_override is not None else _bal_sum(ar_df, None, fy_start),
-                                      pay_override if pay_override is not None else _bal_sum(ap_df, None, fy_start),
-                                      wd=fy_wd,
-                                      oc_override=(sum(_ocm.values()) if _ocm else None),
-                                      qty_in_mt=qty_in_mt) + [
-        round(_old_r, 0),
-        round(_bal_sum(ar_df, None, fy_start), 0),    # all FY-dated open balances
-        round(_old_p, 0),
-        round(_bal_sum(ap_df, None, fy_start), 0),
-    ]
+    _fyb = _summary_block(w,
+                          recv_override if recv_override is not None else _bal_sum(ar_df, None, fy_start),
+                          pay_override if pay_override is not None else _bal_sum(ap_df, None, fy_start),
+                          wd=fy_wd,
+                          oc_override=(sum(_ocm.values()) if _ocm else None),
+                          qty_in_mt=qty_in_mt)
+    data["FY Total"] = (_fyb[:16]
+                        + [round(_bal_sum(ar_df, None, fy_start), 0), round(_old_r, 0)]
+                        + _fyb[16:18]
+                        + [round(_bal_sum(ap_df, None, fy_start), 0), round(_old_p, 0)]
+                        + _fyb[18:])
 
     return pd.DataFrame(data)
 

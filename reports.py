@@ -36,6 +36,124 @@ def _ib_has_vendor_invoice(df: pd.DataFrame, ship: pd.Series) -> pd.Series:
     return has_inv.groupby(ship).transform("max").astype(bool)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# COLUMN GUIDE — what each report column is, which SIDE it comes from, and its
+# GST treatment. Written as a sheet into every downloaded workbook.
+# Side: where the data originates. GST: Excl = Zoho subtotal (before GST).
+# ══════════════════════════════════════════════════════════════════════════════
+COLUMN_GUIDE = [
+    # (Column, Side / Source, GST, What it is)
+    ("Quarter",                "Key — derived",            "—", "Fiscal quarter of the invoice date"),
+    ("Month",                  "Key — derived",            "—", "Invoice month (full name)"),
+    ("Date",                   "Buyer (Invoice)",          "—", "Invoice date — drives month bucketing"),
+    ("Shipment ID",            "Key — Zoho SO",            "—", "CF.SO Number linking invoice and bill"),
+    ("Supplier Name",          "Seller (Bill)",            "—", "Vendor on the purchase bill"),
+    ("GST Reg No.",            "Seller (Bill)",            "—", "Supplier GSTIN"),
+    ("Vendor Invoice No.",     "Seller (Bill)",            "—", "Bill number"),
+    ("Vendor Invoice Date",    "Seller (Bill)",            "—", "Supplier invoice date (CF)"),
+    ("P V No.",                "Seller (Bill)",            "—", "Purchase voucher no. (CF)"),
+    ("P V Date",               "Seller (Bill)",            "—", "Purchase voucher date (CF)"),
+    ("State (Origin)",         "Seller (Bill)",            "—", "Source of supply"),
+    ("Vehicle No.",            "Seller (Bill)",            "—", "Vehicle (CF)"),
+    ("Material",               "Key — item",               "—", "Item name (joins invoice↔bill)"),
+    ("Qty (Kg)",               "Seller (Bill)",            "—", "Purchased quantity in Kg"),
+    ("Price/Kg",               "Seller (Bill)",            "Excl. GST", "Material rate agreed with supplier = Purchase Price ÷ Qty"),
+    ("Purchase Price",         "Seller (Bill)",            "Excl. GST", "Material purchase amount (bill subtotal)"),
+    ("Return Qty",             "Computed (purchase side)", "—", "Qty returned to supplier (from large DNs)"),
+    ("Net Qty",                "Computed (purchase side)", "—", "Purchased qty − returns"),
+    ("Basic Customs Duty",     "Seller (Bill)",            "Excl. GST", "Customs duty on imports (rarely used)"),
+    ("Transporter Name",       "Logistics (Bill)",         "—", "Transport vendor"),
+    ("LR NO/BILL NO",          "Logistics (Bill)",         "—", "Lorry receipt / bill no."),
+    ("J V No.",                "Logistics (Bill)",         "—", "Journal voucher no."),
+    ("JV Date",                "Logistics (Bill)",         "—", "Journal voucher date"),
+    ("Logistics cost",         "Logistics (Bill)",         "Excl. GST", "Actual transport charge billed"),
+    ("Debit note on logistic cost", "Logistics (DN)",      "Excl. GST", "Vendor DN recovering logistics"),
+    ("Logistics Provision",    "Computed",                 "Excl. GST", "Estimated logistics (zero when actual exists)"),
+    ("Total Logistics Cost",   "Computed",                 "Excl. GST", "Actual + provision − DN on logistics"),
+    ("Operational Cost",       "Computed",                 "Excl. GST", "Vertical overhead allocated to the row"),
+    ("Cost/Kg.",               "Computed",                 "Excl. GST", "OPERATIONAL COST PER KG — landed cost: (Purchase Price + Total Logistics) ÷ Net Qty"),
+    ("Divertion/Internal",     "Computed (purchase side)", "—", "Internal diversion adjustment (purchase)"),
+    ("Debit Note No.",         "Seller side (Vendor Credit)", "—", "1st vendor DN number"),
+    ("Debit Note Date.",       "Seller side (Vendor Credit)", "—", "1st vendor DN date"),
+    ("Debit Note No. 2",       "Seller side (Vendor Credit)", "—", "2nd DN (aggregates ALL remaining notes)"),
+    ("Debit Note Date. 2",     "Seller side (Vendor Credit)", "—", "2nd DN date"),
+    ("Full Debit Note",        "Computed",                 "Excl. GST", "DN treated as full purchase reversal (≥ threshold)"),
+    ("Actual Debit Note",      "Seller side (Vendor Credit)", "Excl. GST", "Sum of ALL actual vendor DNs on the shipment"),
+    ("Provision for DN",       "Computed",                 "Excl. GST", "Estimated future DN (per-vertical rate; zero if actual exists / excluded)"),
+    ("Total Cost",             "Computed",                 "Excl. GST", "Purchase + logistics + diversion + full DN + customs − actual DN − DN provision"),
+    ("Inv. Date",              "Buyer (Invoice)",          "—", "Sales invoice date"),
+    ("Inv. No.",               "Buyer (Invoice)",          "—", "Sales invoice number"),
+    ("Customer ID",            "Buyer (Invoice)",          "—", "Zoho customer id"),
+    ("Buyer Name",             "Buyer (Invoice)",          "—", "Customer sold to"),
+    ("Buyer GST Number ",      "Buyer (Invoice)",          "—", "Buyer GSTIN"),
+    ("Location (Origin)",      "Buyer (Invoice)",          "—", "Dispatch from (CF)"),
+    ("Location (Destination)", "Buyer (Invoice)",          "—", "Shipping city"),
+    ("State (Destination)",    "Buyer (Invoice)",          "—", "Shipping state"),
+    ("Qty(Kg)",                "Buyer (Invoice)",          "—", "Sold quantity in Kg (units for IT AD / Re-Commerce)"),
+    ("Rate/Kg",                "Buyer (Invoice)",          "Excl. GST", "Sale rate per Kg"),
+    ("Amount",                 "Buyer (Invoice)",          "Excl. GST", "Sales amount (invoice subtotal)"),
+    ("Qty Check",              "Computed",                 "—", "Purchase-vs-sales quantity check"),
+    ("Return Qty",             "Computed (sales side)",    "—", "Qty returned by buyer (from large CNs)"),
+    ("Net Qty",                "Computed (sales side)",    "—", "Sold qty − buyer returns"),
+    ("Divertion/Internal",     "Computed (sales side)",    "—", "Internal diversion adjustment (sales)"),
+    ("Return Type",            "Manual note",              "—", "Analyst's return classification (blank in engine)"),
+    ("Date : DN to Buyer",     "Manual note",              "—", "DN-to-buyer date (blank in engine)"),
+    ("DN to Buyer",            "Manual note",              "—", "DN-to-buyer ref (blank in engine)"),
+    ("Amount",                 "Computed (DN to buyer)",   "Excl. GST", "DN-to-buyer amount"),
+    ("Credit Note No:1",       "Buyer side (Credit Note)", "—", "1st customer CN number"),
+    ("CN Date. No:1",          "Buyer side (Credit Note)", "—", "1st CN date"),
+    ("Credit Note No:2",       "Buyer side (Credit Note)", "—", "2nd CN (aggregates ALL remaining notes)"),
+    ("CN Date. No:2",          "Buyer side (Credit Note)", "—", "2nd CN date"),
+    ("Full Credit Notes",      "Computed",                 "Excl. GST", "CN treated as full sale reversal (≥95%)"),
+    ("Actual Credit Note",     "Buyer side (Credit Note)", "Excl. GST", "Sum of ALL actual customer CNs on the shipment"),
+    ("Provision for CN",       "Computed",                 "Excl. GST", "Estimated future CN (End Generator 4.55%, Plastic 2.5%; zero if actual/excluded)"),
+    ("Net Revenue",            "Computed",                 "Excl. GST", "Sales − actual CN − CN provision − full reversals"),
+    ("Margin",                 "Computed",                 "Excl. GST", "Net Revenue − Total Cost (row margin, without GST)"),
+    ("Reamrks - Margin",       "Computed",                 "—", "Margin remark"),
+    ("Remarks",                "Manual note",              "—", "Free remark (blank in engine)"),
+    ("LMI @ Inception",        "Computed",                 "Excl. GST", "Margin at inception (before notes)"),
+    ("Remarks @ Inception",    "Computed",                 "—", "Inception remark"),
+    ("Margin (%)",             "Computed",                 "—", "Margin ÷ Net Revenue"),
+    ("Margin Bucket",          "Computed",                 "—", "Margin band classification"),
+    ("Total CN(Inc.Provisions)","Computed",                "Excl. GST", "Actual CN + CN provision"),
+    ("Total DN(Inc.Provisions)","Computed",                "Excl. GST", "Actual DN + DN provision"),
+    ("Check",                  "Computed",                 "—", "Internal consistency check"),
+    ("Actaul CN",              "Buyer side (Credit Note)", "Excl. GST", "Actual CN total (display copy)"),
+    ("Actual DN",              "Seller side (Vendor Credit)", "Excl. GST", "Actual DN total (display copy)"),
+    ("Check",                  "Computed",                 "—", "Internal consistency check (2nd)"),
+    ("Material-Short Form",    "Manual note",              "—", "Analyst's short code (blank in engine)"),
+    ("Supplier Type",          "Manual note",              "—", "Analyst's supplier classification (blank in engine)"),
+    ("Month",                  "Key — derived",            "—", "Month in mmm-yy (2nd Month column)"),
+    ("Cost",                   "Computed",                 "Excl. GST", "Total Cost copy for pivots"),
+    ("Revenue",                "Computed",                 "Excl. GST", "Net Revenue copy for pivots"),
+    ("Week No:",               "Key — derived",            "—", "ISO week of the invoice date"),
+    ("Category (Material)",    "Manual note",              "—", "Analyst's material category (blank in engine)"),
+    ("Broad Category",         "Buyer (Invoice)",          "—", "Vertical — parsed from the invoice Account"),
+    ("POC Name",               "Manual note",              "—", "Analyst's POC (blank in engine)"),
+    ("Gross Margin",           "Computed",                 "Excl. GST", "Revenue − Cost (gross)"),
+    ("Recykal Margin",         "Computed",                 "Excl. GST", "Recykal share of margin"),
+    ("Net Margin",             "Computed",                 "Excl. GST", "Net Revenue − Total Cost"),
+    ("Sales ",                 "Computed — GST block",     "INCL. GST (×1.18)", "Sales with GST"),
+    ("Purchases",              "Computed — GST block",     "INCL. GST (×1.18)", "Purchases with GST (negative = cost)"),
+    ("Credit Note",            "Computed — GST block",     "INCL. GST (×1.18)", "CN with GST (negative)"),
+    ("Debit Note",             "Computed — GST block",     "INCL. GST (×1.18)", "DN with GST (positive recovery)"),
+    ("Margin",                 "Computed — GST block",     "INCL. GST", "Margin with GST (3rd Margin column)"),
+    ("Bill Branch",            "Seller (Bill)",            "—", "Branch on the bill"),
+    ("Inv Branch",             "Buyer (Invoice)",          "—", "Account on the invoice"),
+    ("Vendor PAN No",          "Seller (Bill)",            "—", "Supplier GSTIN (PAN embedded)"),
+    ("Customer PAN No",        "Buyer (Invoice)",          "—", "Buyer GSTIN (PAN embedded)"),
+    ("GST TDS Applicability",  "Manual note",              "—", "Analyst's TDS flag (blank in engine)"),
+    ("Cash Discount(Provision)","Manual note",             "Excl. GST", "Cash-discount provision (blank in engine)"),
+    ("Cash Discount",          "Manual note",              "Excl. GST", "Actual cash discount (blank in engine)"),
+    ("Cash Discount. No",      "Manual note",              "—", "Cash-discount ref (blank in engine)"),
+    ("CD Date",                "Manual note",              "—", "Cash-discount date (blank in engine)"),
+    ("SD",                     "Manual note",              "—", "Security deposit note (blank in engine)"),
+    ("Cost Source",            "Computed — provenance",    "—", "Where the row's cost came from: Current Bill / Amazon chain / Older bill / blank = no cost found"),
+    ("Resale Note",            "Computed — provenance",    "—", "Resold-item flag (return-to-seller → resale, original cost carried)"),
+    ("Row Source",             "Computed — provenance",    "—", "Manual file (frozen month) vs Live (MIS) — which source produced this row"),
+]
+
+
 def _is_mp_ship(ship: pd.Series) -> pd.Series:
     """True where a Shipment/SO id is an MP (warehouse/marketplace-internal)
     movement. Zoho sometimes writes these with a numeric prefix — e.g.
@@ -128,6 +246,12 @@ SUMMARY_METRICS = [
     "Credit Notes (% to Revenue)",
     "Debit Notes (Value - Incl. Prov)",
     "Debit Notes (% to Purchase)",
+    # Receivable/Payable bifurcated by INVOICE date at the FY start (1-Apr).
+    # Display-only split — the original Receivables/Payable rows are unchanged.
+    "Old Receivables (pre-Apr, exl Legacy)",
+    "FY 27 Receivables",
+    "Old Payables (pre-Apr)",
+    "FY 27 Payables",
 ]
 
 
@@ -166,6 +290,34 @@ def _bal_sum(df: pd.DataFrame | None, month: str | None,
     if fy_start is not None:
         return float(bal[dts >= fy_start].sum())
     return float(bal.sum())
+
+
+def _old_bal(df: pd.DataFrame | None, fy_start, exclude_legacy: bool = False) -> float:
+    """Open balance of documents dated BEFORE the FY start ('Old' receivable/
+    payable). For receivables the legacy-customer rule applies: long-overdue
+    defaulter accounts are excluded, same list the Net Receivable uses."""
+    if df is None or getattr(df, "empty", True) or fy_start is None:
+        return 0.0
+    bal_col  = next((c for c in df.columns if "balance" in str(c).lower()), None)
+    date_col = next((c for c in df.columns if str(c).lower() == "date"), None)
+    if bal_col is None or date_col is None:
+        return 0.0
+    bal = pd.to_numeric(df[bal_col], errors="coerce").fillna(0)
+    dts = pd.to_datetime(df[date_col], errors="coerce")
+    mask = dts.notna() & (dts < fy_start)
+    if exclude_legacy:
+        cust_col = next((c for c in df.columns if "customer_name" in str(c).lower()
+                         or "customer name" in str(c).lower()), None)
+        if cust_col is not None:
+            try:
+                import receivables as _rcv
+                _names = [n for names in _rcv.LEGACY_CUSTOMERS.values() for n in names]
+                cu = df[cust_col].astype(str).str.upper()
+                legacy = cu.apply(lambda x: any(n in x for n in _names))
+                mask &= ~legacy
+            except Exception:
+                pass
+    return float(bal[mask].sum())
 
 
 def _summary_block(w: pd.DataFrame, recv: float, pay: float, wd: float = 30,
@@ -320,6 +472,9 @@ def summary_report(profit_df: pd.DataFrame,
 
     data = {"Metric": SUMMARY_METRICS}
     _ocm = op_cost_by_month or {}
+    # Old (pre-FY) balances are constants — the documents predate every column.
+    _old_r = _old_bal(ar_df, fy_start, exclude_legacy=True)
+    _old_p = _old_bal(ap_df, fy_start)
     for m in months:
         # recv_override is a single point-in-time net (legacy+unused+prefix rule);
         # apply it to the LATEST month only (it's a current snapshot), leave history
@@ -332,7 +487,13 @@ def summary_report(profit_df: pd.DataFrame,
                                  _rv, _pv,
                                  wd=_working_days(m),
                                  oc_override=(_ocm.get(m) if _ocm else None),
-                                 qty_in_mt=qty_in_mt)
+                                 qty_in_mt=qty_in_mt) + [
+            # bifurcation rows — same balance math, split by invoice date at 1-Apr
+            round(_old_r, 0),
+            round(_bal_sum(ar_df, m, fy_start), 0),   # FY-dated, cumulative to month-end
+            round(_old_p, 0),
+            round(_bal_sum(ap_df, m, fy_start), 0),
+        ]
 
     # FY working days = total days from FY start to the global cutoff (not summed)
     fy_wd = int((end_dt - fy_start).days) + 1 if (pd.notna(end_dt) and fy_start is not None) else 30
@@ -341,7 +502,12 @@ def summary_report(profit_df: pd.DataFrame,
                                       pay_override if pay_override is not None else _bal_sum(ap_df, None, fy_start),
                                       wd=fy_wd,
                                       oc_override=(sum(_ocm.values()) if _ocm else None),
-                                      qty_in_mt=qty_in_mt)
+                                      qty_in_mt=qty_in_mt) + [
+        round(_old_r, 0),
+        round(_bal_sum(ar_df, None, fy_start), 0),    # all FY-dated open balances
+        round(_old_p, 0),
+        round(_bal_sum(ap_df, None, fy_start), 0),
+    ]
 
     return pd.DataFrame(data)
 
@@ -825,6 +991,11 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
             buyer_summary(_mrep).to_excel(w, sheet_name="Buyer Metrics", index=False)
         except Exception:
             pass    # metrics are additive extras — never block the workbook
+
+        # ── Sheet 7: Column Guide — every report column's side/GST/meaning ───
+        pd.DataFrame(COLUMN_GUIDE,
+                     columns=["Column", "Side / Source", "GST", "What it is"]) \
+            .to_excel(w, sheet_name="Column Guide", index=False)
 
     buf.seek(0)
     return buf.read()

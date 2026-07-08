@@ -442,6 +442,19 @@ def summary_report(profit_df: pd.DataFrame,
             return int(end_dt.day)
         return int(md.days_in_month)
 
+    def _split(bal_df, parent_val, m):
+        """Split the SHOWN balance (parent_val) into FY-27 vs Old by INVOICE date,
+        using the FY-dated proportion of the same AR/AP subset. Always ties back to
+        the parent (FY27 + Old = parent) and can never go negative — because the
+        parent may use a special/frozen basis, we allocate it by the aging's
+        date-composition rather than summing a different row set."""
+        tot = _bal_sum(bal_df, m, None)          # all open balances (to month-end)
+        fy  = _bal_sum(bal_df, m, fy_start)      # the FY-dated portion
+        frac = (fy / tot) if tot else 0.0
+        v = float(parent_val or 0)
+        f27 = round(v * frac, 0)
+        return f27, round(v - f27, 0)
+
     data = {"Metric": SUMMARY_METRICS}
     _ocm = op_cost_by_month or {}
     for m in months:
@@ -457,15 +470,13 @@ def summary_report(profit_df: pd.DataFrame,
                               wd=_working_days(m),
                               oc_override=(_ocm.get(m) if _ocm else None),
                               qty_in_mt=qty_in_mt)
-        # bifurcation rows, slotted under their parents:
-        #   FY 27 = FY-dated open balance (invoice date ≥ 1-Apr, cumulative)
-        #   Old   = parent row − FY 27  (so the split always ties to the total)
-        _f27r = round(_bal_sum(ar_df, m, fy_start), 0)
-        _f27p = round(_bal_sum(ap_df, m, fy_start), 0)
+        # bifurcation rows, slotted under their parents (FY27 + Old = parent)
+        _f27r, _oldr = _split(ar_df, _rv, m)
+        _f27p, _oldp = _split(ap_df, _pv, m)
         data[m] = (_blk[:16]
-                   + [_f27r, round(float(_rv or 0) - _f27r, 0)]
+                   + [_f27r, _oldr]
                    + _blk[16:18]
-                   + [_f27p, round(float(_pv or 0) - _f27p, 0)]
+                   + [_f27p, _oldp]
                    + _blk[18:])
 
     # FY working days = total days from FY start to the global cutoff (not summed)
@@ -476,14 +487,14 @@ def summary_report(profit_df: pd.DataFrame,
                           wd=fy_wd,
                           oc_override=(sum(_ocm.values()) if _ocm else None),
                           qty_in_mt=qty_in_mt)
-    _f27r_fy = round(_bal_sum(ar_df, None, fy_start), 0)
-    _f27p_fy = round(_bal_sum(ap_df, None, fy_start), 0)
     _rv_fy = recv_override if recv_override is not None else _bal_sum(ar_df, None, fy_start)
     _pv_fy = pay_override if pay_override is not None else _bal_sum(ap_df, None, fy_start)
+    _f27r_fy, _oldr_fy = _split(ar_df, _rv_fy, None)
+    _f27p_fy, _oldp_fy = _split(ap_df, _pv_fy, None)
     data["FY Total"] = (_fyb[:16]
-                        + [_f27r_fy, round(float(_rv_fy or 0) - _f27r_fy, 0)]
+                        + [_f27r_fy, _oldr_fy]
                         + _fyb[16:18]
-                        + [_f27p_fy, round(float(_pv_fy or 0) - _f27p_fy, 0)]
+                        + [_f27p_fy, _oldp_fy]
                         + _fyb[18:])
 
     return pd.DataFrame(data)

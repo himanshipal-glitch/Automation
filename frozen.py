@@ -323,15 +323,21 @@ def apply_frozen(summaries: dict, folder: str, open_month: str | None) -> dict:
 
 
 def _rederive_splits(df: pd.DataFrame) -> None:
-    """Old = parent − FY 27, re-derived AFTER the frozen overlay rewrites the
-    parent Receivables/Payable rows — the split always ties to what's shown.
-    Rows: 15 Recv, 16 FY27 R, 17 Old R · 19 Pay, 20 FY27 P, 21 Old P."""
+    """Re-split the FY-27/Old rows AFTER the frozen overlay rewrites the parent
+    Receivable/Payable — keep the FY-vs-old RATIO but rescale to the (frozen)
+    parent, so FY27 + Old always equals the shown parent and neither goes
+    negative. Rows: 15 Recv, 16 FY27 R, 17 Old R · 19 Pay, 20 FY27 P, 21 Old P."""
+    if len(df) <= 21:
+        return
     def g(i, c):
         return float(pd.to_numeric(pd.Series([df.iat[i, c]]), errors="coerce").fillna(0).iloc[0])
     for c in range(1, df.shape[1]):
-        if len(df) > 21:
-            df.iat[17, c] = round(g(15, c) - g(16, c), 0)
-            df.iat[21, c] = round(g(19, c) - g(20, c), 0)
+        for parent, i27, iold in ((15, 16, 17), (19, 20, 21)):
+            p = g(parent, c)
+            tot = g(i27, c) + g(iold, c)
+            r = (g(i27, c) / tot) if tot else 0.0     # FY-dated share, preserved
+            df.iat[i27, c] = round(p * r, 0)
+            df.iat[iold, c] = round(p - p * r, 0)
 
 
 def frozen_details(folder: str) -> dict:

@@ -107,7 +107,7 @@ with st.sidebar:
     st.markdown("---")
     # build tag — bump when pushing significant changes; confirms which version
     # a deployed instance is running (hosted apps can lag behind the repo)
-    st.caption("build: **v1.3 — Old = parent − FY 27**")
+    st.caption("build: **v1.4 — fix: NO-DN-first upload**")
     status = db.all_db_status()
     loaded = [s for s, v in status.items() if v["exists"]]
     st.caption(f"{len(loaded)} / {len(status)} sheets loaded")
@@ -577,12 +577,19 @@ if page == "Upload Files":
         try:
             xl = pd.ExcelFile(io.BytesIO(file_bytes))
             low = filename.lower()
-            # "CF.DN = No" exclusion list — shipments that should NOT get the provision.
-            # Detected by a DebitNotefromBuyer column, or a no-dn filename keyword.
+            # Does the workbook contain core dataset sheets (Bill/CN/DN/AP/AR/Inv)?
+            # The combined MIS export does; a STANDALONE no-DN file does not. Zoho
+            # sometimes puts 'NO DN' FIRST in the combined file, so we must NOT let
+            # the standalone-file shortcut below swallow the whole workbook — the
+            # per-sheet loop handles the NO DN sheet correctly on its own.
+            has_core = any(_canon_sheet(s) for s in xl.sheet_names)
+            # "CF.DN = No" exclusion list — a STANDALONE file, detected by a
+            # DebitNotefromBuyer column or a no-dn filename keyword.
             ex0 = pd.read_excel(io.BytesIO(file_bytes), sheet_name=xl.sheet_names[0], nrows=3)
             ex_cols = {str(c).strip().lower().replace(" ", "") for c in ex0.columns}
             has_dnbuyer = any("debitnote" in c and "buyer" in c for c in ex_cols)
-            if has_dnbuyer or any(k in low for k in ["no dn", "no_dn", "cf.dn", "cf dn", "dn no", "dn status", "non dn", "exclude"]):
+            if not has_core and (has_dnbuyer or any(k in low for k in
+                    ["no dn", "no_dn", "cf.dn", "cf dn", "dn no", "dn status", "non dn", "exclude"])):
                 ex = pd.read_excel(io.BytesIO(file_bytes), sheet_name=xl.sheet_names[0]).dropna(how="all")
                 n = db.save_no_dn_shipments(ex)
                 results.append({"File": filename, "Sheet": xl.sheet_names[0], "Dataset": "No-DN exclusion (saved)",

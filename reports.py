@@ -11,6 +11,8 @@ import io
 import re as _re
 import pandas as pd
 import numpy as np
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -19,7 +21,7 @@ import numpy as np
 
 def _ib_has_vendor_invoice(df: pd.DataFrame, ship: pd.Series) -> pd.Series:
     """Per-row boolean: does this shipment have ANY vendor (purchase) invoice?
-    IB(B2B) shipments with only logistics bills and no material purchase invoice
+    Enterprise shipments with only logistics bills and no material purchase invoice
     are dropped. A shipment qualifies if any of its rows has a non-blank Vendor
     Invoice No. or a non-zero Purchase Price."""
     def _pick(cands, pos):
@@ -168,8 +170,8 @@ def split_by_category(profit_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     Split the full profitability report into one report per Broad Category.
 
     Special rule — Institutional Business is split into TWO reports:
-      - IB(B2B)       : rows whose Shipment ID starts with 'SHID'
-      - IB(Warehouse) : all other Institutional Business rows
+      - Enterprise       : rows whose Shipment ID starts with 'SHID'
+      - Processing Center : all other Institutional Business rows
 
     Returns {report_name: DataFrame} preserving the exact 105 columns.
     """
@@ -197,8 +199,8 @@ def split_by_category(profit_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
             wh  = mask & (~_sh.str.startswith("SH") | _sh.str.contains("MPIB", na=False))
             b2b = b2b & _ib_has_vendor_invoice(profit_df, ship)
             # always emit BOTH reports — even if one currently has 0 rows
-            out["IB(B2B)"]       = profit_df[b2b].reset_index(drop=True)
-            out["IB(Warehouse)"] = profit_df[wh].reset_index(drop=True)
+            out["Enterprise"]       = profit_df[b2b].reset_index(drop=True)
+            out["Processing Center"] = profit_df[wh].reset_index(drop=True)
         else:
             label = c if c and c.lower() != "nan" else "Uncategorised"
             # MP (warehouse) movements don't belong to the vertical's report —
@@ -317,7 +319,7 @@ def _summary_block(w: pd.DataFrame, recv: float, pay: float, wd: float = 30,
     # DNs (incl. full-reversal returns to seller) reduce the purchase cost, the
     # same way the manual nets DN out of its Purchases line.
     #   ── BUT only for the verticals that net DN. Re-Commerce, ReWerse and
-    #      IB(Warehouse) are left exactly as before (gross purchase, no DN net):
+    #      Processing Center are left exactly as before (gross purchase, no DN net):
     #      their manuals carry ~0 actual DN, so netting would over-state margin.
     _cat  = w["Broad_Category"].astype(str)
     _ship = w["Shipment_ID"].astype(str).str.strip().str.upper()
@@ -326,7 +328,7 @@ def _summary_block(w: pd.DataFrame, recv: float, pay: float, wd: float = 30,
         | _cat.str.contains("recommerce", case=False, na=False)
         | _cat.str.contains("rewerse", case=False, na=False)
         | (_cat.str.strip().str.lower().str.startswith("institutional")
-           & ~_ship.str.startswith("SH"))            # IB(Warehouse)
+           & ~_ship.str.startswith("SH"))            # Processing Center
     )
     _elig = ~_no_net
     net_dn = float(w.loc[_elig, "Actual_DN"].sum()) + float(w.loc[_elig, "Provision_for_DN"].sum())
@@ -502,13 +504,13 @@ def summary_report(profit_df: pd.DataFrame,
 
 # ── Per-vertical receivables attribution (for DSO) ────────────────────────────
 _AR_TOKEN_TAB = [
-    ("rew", "ReWerse"), ("met", "Metal"), ("rec", "Re-Commerce"),
+    ("rew", "ReWerse"), ("met", "End Generator"), ("rec", "Re-Commerce"),
     ("afr", "AFR"), ("pet", "Plastic"), ("iad", "IT AD"), ("m4", "M4"),
 ]
 
 
 def _ar_token_tab(tn: str) -> str:
-    """Map an AR invoice number's segment token (e.g. 36/MET/27IN.. → Metal)."""
+    """Map an AR invoice number's segment token (e.g. 36/MET/27IN.. → End Generator)."""
     import re as _re
     m = _re.match(r"^\d+/([A-Za-z0-9]+)/", str(tn))
     tok = m.group(1).lower() if m else ""
@@ -516,13 +518,13 @@ def _ar_token_tab(tn: str) -> str:
         if k in tok:
             return v
     if tok == "ib" or "pib" in tok:
-        return "IB(B2B)"
+        return "Enterprise"
     return ""
 
 
 def _inv_tab_map(profit_df: pd.DataFrame) -> dict:
     """invoice-number → tab label, from the profitability rows (handles the
-    IB B2B/Warehouse split and the MP-warehouse carve-out)."""
+    Enterprise/Processing Center split and the MP-warehouse carve-out)."""
     inv  = profit_df.iloc[:, 39].astype(str).str.strip()
     cat  = profit_df.iloc[:, 85].astype(str).str.strip()
     ship = profit_df.iloc[:, 3].astype(str).str.strip().str.upper()
@@ -532,7 +534,7 @@ def _inv_tab_map(profit_df: pd.DataFrame) -> dict:
             continue
         cl = c.lower().replace(" ", "")
         if cl.startswith("institutional"):
-            lab = "IB(B2B)" if (sh.startswith("SH") and "MPIB" not in sh) else "IB(Warehouse)"
+            lab = "Enterprise" if (sh.startswith("SH") and "MPIB" not in sh) else "Processing Center"
         elif _re.sub(r"^\d+/", "", sh).startswith("MP") and "re-commerce" not in c.lower():
             lab = "Warehouse (MP)"
         else:
@@ -596,7 +598,7 @@ def summaries_by_category(profit_df: pd.DataFrame,
                           op_cost_bills: pd.DataFrame | None = None) -> dict[str, pd.DataFrame]:
     """
     One summary report per Broad Category — with Institutional Business
-    split into IB(B2B) (Shipment ID starts 'SHID') and IB(Warehouse).
+    split into Enterprise (Shipment ID starts 'SHID') and Processing Center.
     Also includes an 'All Categories' overall summary first.
     Note: Receivables/Payables come from the company-wide AR/AP sheets and
     are the same on every tab (they are not category-attributable).
@@ -643,11 +645,11 @@ def summaries_by_category(profit_df: pd.DataFrame,
 
     def _recv_net(tab: str):
         key = "".join(ch for ch in str(tab).lower() if ch.isalnum())
-        # NOTE: IB is intentionally NOT mapped here. IB(B2B) and IB(Warehouse) need
+        # NOTE: IB is intentionally NOT mapped here. Enterprise and Processing Center need
         # their own receivable split (the Enterprise sheet's B2B figure is a specific
         # subset, not the whole-IB net) — until that rule is cracked, IB keeps its
         # prior per-month balance rather than a wrong override.
-        alias = {"metal": "Metal", "plastic": "Plastic", "rewerse": "ReWerse",
+        alias = {"metal": "End Generator", "plastic": "Plastic", "rewerse": "ReWerse",
                  "recommerce": "Re-Commerce", "itad": "ITAD", "itassetsdisposition": "ITAD",
                  "afr": "AFR", "m4": "M4"}
         return _net_by_v.get(alias.get(key))
@@ -669,8 +671,8 @@ def summaries_by_category(profit_df: pd.DataFrame,
         t = "".join(ch for ch in str(tab).lower() if ch.isalnum())
         return {"metal": "metal waste", "plastic": "plastic waste", "recommerce": "re-commerce",
                 "itad": "it assets", "itassetsdisposition": "it assets",
-                "afr": "(afr)", "m4": "(m4)", "ibb2b": "institutional",
-                "ibwarehouse": "institutional"}.get(t)
+                "afr": "(afr)", "m4": "(m4)", "enterprise": "institutional",
+                "processingcenter": "institutional"}.get(t)
 
     def _ap(tab: str):
         """AP rows for a vertical, filtered by vendor.CF.Vertical Name — so every
@@ -714,7 +716,7 @@ def summaries_by_category(profit_df: pd.DataFrame,
             b2b = mask & _sh.str.startswith("SH") & ~_sh.str.contains("MPIB", na=False)
             wh  = mask & (~_sh.str.startswith("SH") | _sh.str.contains("MPIB", na=False))
             b2b = b2b & _ib_has_vendor_invoice(main_df, ship)
-            # IB(B2B) receivable: only AR invoices that actually appear in the B2B
+            # Enterprise receivable: only AR invoices that actually appear in the B2B
             # profitability (isolates B2B from warehouse, which share IB prefixes).
             _ib_recv = None
             if ar_df is not None and not getattr(ar_df, "empty", True):
@@ -725,10 +727,10 @@ def summaries_by_category(profit_df: pd.DataFrame,
                     _b2b_invs = set(main_df[b2b].iloc[:, 39].astype(str).str.strip()) - {"", "nan"}
                     _sel = ar_df[ar_df[_tn].astype(str).str.strip().isin(_b2b_invs)]
                     _ib_recv = float(pd.to_numeric(_sel[_bc], errors="coerce").fillna(0).sum())
-            out["IB(B2B)"]       = summary_report(main_df[b2b], _ar("IB(B2B)"), _ap("IB(B2B)"),
-                                                  recv_override=_ib_recv, pay_override=_pay_net("IB(B2B)"),
+            out["Enterprise"]       = summary_report(main_df[b2b], _ar("Enterprise"), _ap("Enterprise"),
+                                                  recv_override=_ib_recv, pay_override=_pay_net("Enterprise"),
                                                   axis_end=_axis_end)
-            out["IB(Warehouse)"] = summary_report(main_df[wh], _ar("IB(Warehouse)"), _ap("IB(Warehouse)"),
+            out["Processing Center"] = summary_report(main_df[wh], _ar("Processing Center"), _ap("Processing Center"),
                                                   axis_end=_axis_end)
         else:
             label = c if c and c.lower() != "nan" else "Uncategorised"
@@ -740,7 +742,7 @@ def summaries_by_category(profit_df: pd.DataFrame,
 
     # Out-of-scope verticals — handled manually, not part of the automated report.
     # (Their rows still roll into 'All Categories'; only their own tabs are hidden.)
-    for _oos in ("ReWerse", "IB(Warehouse)"):
+    for _oos in ("ReWerse", "Processing Center"):
         out.pop(_oos, None)
 
     return out
@@ -762,10 +764,10 @@ def top_materials(profit_df: pd.DataFrame, tab: str, n: int = 5):
     cat  = w["Broad_Category"].astype(str)
 
     key = "".join(ch for ch in str(tab).lower() if ch.isalnum())
-    if key in ("ibb2b", "ibwarehouse"):
+    if key in ("enterprise", "processingcenter"):
         inst = cat.str.strip().str.lower().str.startswith("institutional")
         b2b = inst & ship.str.startswith("SH") & ~ship.str.contains("MPIB", na=False)
-        if key == "ibb2b":
+        if key == "enterprise":
             mask = b2b & _ib_has_vendor_invoice(w, w["Shipment_ID"].astype(str).str.strip())
         else:
             mask = inst & ~b2b
@@ -836,9 +838,9 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
             summ, det = rb["summary"], rb["detail"]
             if vertical:
                 vn = "".join(c for c in vertical.lower() if c.isalnum())
-                alias = {"metal": "Metal", "plastic": "Plastic", "rewerse": "ReWerse",
+                alias = {"metal": "End Generator", "plastic": "Plastic", "rewerse": "ReWerse",
                          "recommerce": "Re-Commerce", "itad": "ITAD", "afr": "AFR", "m4": "M4",
-                         "ibb2b": "IB", "institutionalbusiness": "IB"}.get(vn, vertical)
+                         "enterprise": "IB", "institutionalbusiness": "IB"}.get(vn, vertical)
                 summ = summ[summ["Vertical"].astype(str) == alias]
                 if "Vertical" in det.columns:
                     det = det[det["Vertical"].astype(str) == alias]
@@ -889,7 +891,7 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
             ap = ap.drop(columns=_junk, errors="ignore")
             if vertical and _vc:
                 sub = {"metal": "metal waste", "plastic": "plastic waste", "recommerce": "re-commerce",
-                       "itad": "it assets", "afr": "(afr)", "m4": "(m4)", "ibb2b": "institutional"}.get(
+                       "itad": "it assets", "afr": "(afr)", "m4": "(m4)", "enterprise": "institutional"}.get(
                        "".join(c for c in vertical.lower() if c.isalnum()))
                 if sub:
                     ap = ap[ap[_vc].astype(str).str.lower().str.contains(sub, na=False, regex=False)]
@@ -909,13 +911,9 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
         # the sheet is a single auditable table: filter by Month, sum any column,
         # cross-check the FY Total. Manual-only columns are dropped; engine
         # columns the manual lacks stay blank. 'Row Source' marks provenance.
-        # No month appears twice per vertical.
-        try:
-            import frozen as _frozen
-            import os as _os
-            _fdet = _frozen.frozen_details(_os.path.dirname(_os.path.abspath(__file__)))
-        except Exception:
-            _fdet = {}
+        # No month appears twice per vertical. (Note: frozen details are no longer mixed in here 
+        # as the user requested this sheet to be 100% live data).
+        _fdet = {}
         try:
             import database as _dbm
             _acc = _dbm.load_profit_details()
@@ -931,15 +929,52 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
 
         def _nrm(s):
             return "".join(ch for ch in str(s).lower() if ch.isalnum() or ch == "%")
+
+        # Build a map: normalised column name → engine column name.
+        # _uniq_cols suffixes duplicates with .1, .2, … (e.g. "Qty(Kg).1").
+        # We store EVERY suffixed variant so _align can resolve them.
         _tmap = {}
         for _c in _tgt:
             _tmap.setdefault(_nrm(_c), _c)
 
+        # Aliases: manual report files may use different column names for the
+        # same data (e.g. "Vendor Name" instead of "Supplier Name"). Map the
+        # normalised manual name → the engine's normalised key so _align picks
+        # it up. Case-insensitive because _nrm already lowercases.
+        _DETAIL_ALIASES = {
+            "vendorname": "suppliername",
+        }
+        for _ak, _av in _DETAIL_ALIASES.items():
+            if _ak not in _tmap and _av in _tmap:
+                _tmap[_ak] = _tmap[_av]
+
         def _align(dfm):
-            """Map a manual Details frame onto the engine's columns by name."""
+            """Map a manual Details frame onto the engine's columns by name.
+
+            Handles duplicate column names: the engine's 107-col layout has
+            repeated names (Qty(Kg), Return Qty, Net Qty, Amount, Month, …).
+            After _uniq_cols these become Foo, Foo.1, Foo.2. The manual file
+            still carries the RAW duplicates (two cols both called "Qty(Kg)").
+            When the first occurrence is already used, we look for the .1, .2
+            suffixed engine column matching the same base name."""
             ren, used = {}, set()
+            # Track how many times each normalised key has been seen in the
+            # manual file so we can map to the right .N engine column.
+            _seen_count: dict[str, int] = {}
             for _c in dfm.columns:
-                _t2 = _tmap.get(_nrm(_c))
+                nk = _nrm(_c)
+                # Apply alias (e.g. vendorname → suppliername)
+                nk_resolved = nk
+                if nk in _DETAIL_ALIASES:
+                    nk_resolved = _DETAIL_ALIASES[nk]
+                occ = _seen_count.get(nk_resolved, 0)
+                _seen_count[nk_resolved] = occ + 1
+                # First occurrence → use base key; subsequent → try .1, .2, …
+                if occ == 0:
+                    lookup = nk_resolved
+                else:
+                    lookup = nk_resolved + str(occ)
+                _t2 = _tmap.get(lookup)
                 if _t2 and _t2 not in used:
                     ren[_c] = _t2
                     used.add(_t2)
@@ -968,7 +1003,16 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
         else:
             _rep = _live_src.copy()
             _rep["Row Source"] = "Live (MIS)"
-        _rep.to_excel(w, sheet_name="Profitability Report", index=False)
+            
+        # Move orphan shipments (Service Charges, etc. with blank Shipment ID) to the bottom
+        if "Shipment ID" in _rep.columns:
+            _is_orphan = _rep["Shipment ID"].astype(str).str.strip().isin(["", "nan", "None", "NaT"])
+            _rep = pd.concat([_rep[~_is_orphan], _rep[_is_orphan]], ignore_index=True)
+
+        _rep.to_excel(w, sheet_name="Profitability Report", index=False,
+                      startrow=1)   # row 1 reserved for group header
+        _add_group_header(w.sheets["Profitability Report"],
+                          list(_rep.columns))
 
         # ── Sheets 5 & 6: Supplier / Buyer metrics — computed over the SAME
         # whole-FY rows as the Profitability Report sheet, so party totals
@@ -985,6 +1029,7 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
                      columns=["Column", "Side / Source", "GST", "What it is"]) \
             .to_excel(w, sheet_name="Column Guide", index=False)
 
+        _style_workbook(w.book)
     buf.seek(0)
     return buf.read()
 
@@ -1000,8 +1045,226 @@ def category_reports_excel(category_dfs: dict[str, pd.DataFrame]) -> bytes:
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         for name, df in category_dfs.items():
             df.to_excel(writer, sheet_name=_sheet_name(name), index=False)
+        _style_workbook(writer.book)
     buf.seek(0)
     return buf.read()
+
+# ── Column‐group definitions for Profitability Report ────────────────────────
+# Each entry: (group_label, list_of_column_names_belonging_to_the_group).
+# The order here defines the order groups appear in the header row.
+# Column names must match the engine output EXACTLY (pre-_uniq_cols names).
+
+_PROF_GROUPS: list[tuple[str, list[str]]] = [
+    ("Raw Data", [
+        "Quarter", "Month", "Date", "Shipment ID",
+    ]),
+    ("Purchase Details", [
+        "Supplier Name", "GST Reg No.", "Vendor Invoice No.",
+        "Vendor Invoice Date", "P V No.", "P V Date", "State (Origin)",
+        "Vehicle No.", "Material", "Qty (Kg)", "Price/Kg",
+        "Purchase Price", "Return Qty", "Net Qty", "Basic Customs Duty",
+    ]),
+    ("Logistics", [
+        "Transporter Name", "LR NO/BILL NO", "J V No.", "JV Date",
+        "Logistics cost", "Debit note on logistic cost",
+        "Logistics Provision", "Total Logistics Cost",
+        "Operational Cost", "Cost/Kg.", "Divertion/Internal",
+    ]),
+    ("Debit Notes to Suppliers", [
+        "Debit Note No.", "Debit Note Date.", "Debit Note No. 2",
+        "Debit Note Date. 2", "Full Debit Note", "Actual Debit Note",
+        "Provision for DN", "Total Cost",
+    ]),
+    ("Sales Details", [
+        "Inv. Date", "Inv. No.", "Customer ID", "Buyer Name",
+        "Buyer GST Number ", "Location (Origin)", "Location (Destination)",
+        "State (Destination)", "Qty(Kg)", "Rate/Kg", "Amount",
+        "Qty Check", "Return Qty", "Net Qty", "Divertion/Internal",
+    ]),
+    ("DN to Customer", [
+        "Return Type", "Date : DN to Buyer", "DN to Buyer", "Amount",
+    ]),
+    ("Credit Notes from Customers", [
+        "Credit Note No:1", "CN Date. No:1", "Credit Note No:2",
+        "CN Date. No:2", "Full Credit Notes", "Actual Credit Note",
+        "Provision for CN",
+    ]),
+    ("Without Provisions", [
+        "Net Revenue", "Margin", "Reamrks - Margin", "Remarks",
+        "LMI @ Inception", "Remarks @ Inception", "Margin (%)",
+        "Margin Bucket",
+    ]),
+    ("CN & DN Checks", [
+        "Total CN(Inc.Provisions)", "Total DN(Inc.Provisions)",
+        "Check", "Actaul CN", "Actual DN", "Check",
+    ]),
+    ("Derived", [
+        "Material-Short Form", "Supplier Type", "Month",
+        "Cost", "Revenue", "Week No:", "Category (Material)",
+        "Broad Category", "POC Name", "Gross Margin",
+        "Recykal Margin", "Net Margin",
+    ]),
+    ("Financials with GST", [
+        "Sales ", "Purchases", "Credit Note", "Debit Note", "Margin",
+        "Bill Branch", "Inv Branch", "Vendor PAN No", "Customer PAN No",
+        "GST TDS Applicability", "Cash Discount(Provision)",
+        "Cash Discount", "Cash Discount. No", "CD Date", "SD",
+    ]),
+    ("Provenance", [
+        "Cost Source", "Resale Note", "Row Source",
+    ]),
+]
+
+# Group header colour palette — alternating so adjacent groups are distinct.
+_GROUP_COLORS = [
+    "1F4E79",  # deep blue
+    "4472C4",  # medium blue
+    "2E75B6",  # steel blue
+    "548235",  # forest green
+    "BF8F00",  # dark gold
+    "843C0B",  # brown
+    "7030A0",  # purple
+    "C00000",  # dark red
+    "2F5496",  # navy
+    "385723",  # dark green
+    "8C4B1A",  # copper
+    "404040",  # charcoal
+]
+
+
+def _add_group_header(ws, columns: list[str]) -> None:
+    """Insert a merged group‐header row (row 1) above the column headers
+    (which are now in row 2 because pandas wrote with startrow=1).
+
+    Matches column names to the _PROF_GROUPS definitions.  Duplicate column
+    names (e.g. two 'Qty(Kg)') are handled by tracking how many times each
+    name has been assigned — the first occurrence maps to the first group
+    that claims it, the second to the next group, etc.
+
+    _uniq_cols may have suffixed duplicates with '.1', '.2', etc.
+    We strip those suffixes to recover the base name for group lookup."""
+
+    import re as _re_local
+
+    def _base_name(col: str) -> str:
+        """Strip the '.N' suffix added by _uniq_cols (e.g. 'Qty(Kg).1' → 'Qty(Kg)')."""
+        return _re_local.sub(r'\.\d+$', '', col)
+
+    # Build a mapping: for each column position (0-indexed) → group label.
+    _col_group: dict[int, str] = {}
+
+    # Walk the actual columns and assign each to its group.
+    _seen: dict[str, int] = {}  # base_name → how many times seen so far
+    for pos, cname in enumerate(columns):
+        base = _base_name(cname)
+        occ = _seen.get(base, 0)
+        _seen[base] = occ + 1
+        # Find which group this (base_name, occurrence) belongs to
+        cum_occ = 0
+        for glabel, gcols_list in _PROF_GROUPS:
+            if base in gcols_list:
+                count_in_group = gcols_list.count(base)
+                if occ >= cum_occ and occ < cum_occ + count_in_group:
+                    _col_group[pos] = glabel
+                    break
+                cum_occ += count_in_group
+
+    # Now write merged cells in row 1.
+    # Walk columns left to right, grouping consecutive cols with the same label.
+    ncols = len(columns)
+    i = 0
+    while i < ncols:
+        label = _col_group.get(i, "")
+        j = i + 1
+        while j < ncols and _col_group.get(j, "") == label:
+            j += 1
+        # Columns i..j-1 share the same group.  Excel is 1-indexed.
+        start_col = i + 1
+        end_col = j  # j-1+1
+        if label:  # only write non-empty groups
+            if end_col > start_col:
+                ws.merge_cells(
+                    start_row=1, start_column=start_col,
+                    end_row=1, end_column=end_col,
+                )
+            cell = ws.cell(row=1, column=start_col, value=label)
+            # Pick colour from palette
+            g_idx = next(
+                (k for k, (gl, _) in enumerate(_PROF_GROUPS) if gl == label), 0
+            )
+            bg = _GROUP_COLORS[g_idx % len(_GROUP_COLORS)]
+            cell.font = Font(bold=True, color="FFFFFF", size=11)
+            cell.fill = PatternFill(start_color=bg, end_color=bg,
+                                    fill_type="solid")
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        i = j
+
+
+# ── Excel formatting ─────────────────────────────────────────────────────────
+
+_HDR_FONT = Font(bold=True, color="FFFFFF")
+_HDR_FILL = PatternFill(start_color="000000", end_color="000000", fill_type="solid")
+
+
+def _style_workbook(wb) -> None:
+    """Auto-fit column widths and style header rows (black bg, white bold text)
+    across every sheet in an openpyxl Workbook.  The Summary sheet uses stacked
+    blocks (title row + header row + data rows) so we detect header rows by
+    looking for the row immediately after a title row.
+
+    The Profitability Report sheet has a group header in row 1 and column
+    headers in row 2 (written with startrow=1), so we style row 2 as the
+    header instead of row 1."""
+    for ws in wb.worksheets:
+        # ── 1. Identify header rows ───────────────────────────────────────────
+        header_rows: set[int] = set()
+        if ws.title == "Summary":
+            # Stacked layout: "■ End Generator" title in col A, header is the NEXT row.
+            for row_idx in range(1, ws.max_row + 1):
+                val = ws.cell(row=row_idx, column=1).value
+                if isinstance(val, str) and val.strip().startswith("■"):
+                    if row_idx + 1 <= ws.max_row:
+                        header_rows.add(row_idx + 1)
+        elif ws.title == "Profitability Report":
+            # Group header is row 1 (styled separately by _add_group_header).
+            # Column headers are in row 2.
+            header_rows.add(2)
+        else:
+            # Normal sheets: row 1 is the header (pandas default).
+            header_rows.add(1)
+            # Receivables/Payables have secondary tables further down.
+            # Detect any row whose col-A value matches a known header name.
+            if ws.title in ("Receivables", "Payables"):
+                for row_idx in range(2, ws.max_row + 1):
+                    v = ws.cell(row=row_idx, column=1).value
+                    if isinstance(v, str) and v.strip().lower() in (
+                        "vertical", "vendor vertical",
+                        "transaction_number", "transaction number",
+                        "date", "vendor_name", "vendor name",
+                    ):
+                        header_rows.add(row_idx)
+
+        # ── 2. Apply header styling ───────────────────────────────────────────
+        for row_idx in header_rows:
+            for col_idx in range(1, ws.max_column + 1):
+                cell = ws.cell(row=row_idx, column=col_idx)
+                cell.font = _HDR_FONT
+                cell.fill = _HDR_FILL
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+
+        # ── 3. Auto-fit column widths ─────────────────────────────────────────
+        for col_idx in range(1, ws.max_column + 1):
+            max_len = 0
+            for row_idx in range(1, ws.max_row + 1):
+                val = ws.cell(row=row_idx, column=col_idx).value
+                if val is not None:
+                    cell_len = len(str(val))
+                    if cell_len > max_len:
+                        max_len = cell_len
+            # clamp: minimum 8, maximum 50; add small padding
+            width = min(max(max_len + 3, 8), 50)
+            col_letter = get_column_letter(col_idx)
+            ws.column_dimensions[col_letter].width = width
 
 
 # ── internal helpers ─────────────────────────────────────────────────────────

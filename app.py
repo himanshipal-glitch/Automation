@@ -249,7 +249,7 @@ _components.html(
   // ("IT AD"→"itad", "IB(B2B)"→"ibb2b") so spaces/brackets don't make the match miss.
   const VERTS=[['endgenerator','END GENERATOR'],['metal','METAL'],['plastic','PLASTIC'],
     ['recommerce','RE-COMMERCE'],['itad','IT AD'],['afr','AFR'],['m4','M4'],
-    ['ibb2b','IB(B2B)'],['ibwarehouse','IB(WAREHOUSE)'],['enterprise','ENTERPRISE'],
+    ['ibb2b','ENTERPRISE'],['ibwarehouse','PROCESSING CENTER'],['enterprise','ENTERPRISE'],
     ['rewerse','REWERSE']];
   R.quip=function(t){t=(t||'').toLowerCase();if(!t)return null;
     if(t.includes('download'))return 'Ohh — grabbing the sheets? 📊';
@@ -1128,7 +1128,7 @@ elif page == "Merge & Compute":
         st.markdown("### Category-wise Profitability Reports")
         st.markdown(
             "One report per **Broad Category**. Institutional Business is split into "
-            "**IB(B2B)** (Shipment ID starts with `SHID`) and **IB(Warehouse)** (the rest)."
+            "**Enterprise** (Shipment ID starts with `SHID`) and **Processing Center** (the rest)."
         )
 
         cat_dfs = reports.split_by_category(profit_df)

@@ -8,10 +8,10 @@ Mechanic (reverse-engineered & validated to the rupee against the manual books):
 
 where, for each vertical:
   • rows are attributed by the INVOICE-NUMBER prefix (the manual's "Check"),
-    e.g. 36/MPMET/.. → Metal, ../MPRE../REW → ReWerse, ../MPREC|REC../ → Re-Commerce.
-  • "unused credits" = the unused_credits_receivable_amount column.
-  • "legacy" = a hand-maintained list of old defaulter customers, subtracted only
-    for the verticals that carry one (Metal & Plastic). Everyone else: legacy = 0.
+    e.g. 36/MPMET/.. → End Generator, ../MPRE../REW → ReWerse, ../MPREC|REC../ → Re-Commerce.
+
+    The builder subtracts BOTH unused credits and a hardcoded "Legacy outstanding"
+    for the verticals that carry one (End Generator & Plastic). Everyone else: legacy = 0.
 """
 from __future__ import annotations
 import io
@@ -37,7 +37,7 @@ DETAIL_COLS = [
 # Anything not listed here is a non-reported business line (EPR / Sustainability /
 # Paper / Industrial-Waste / etc.) and is intentionally left out.
 PREFIX_TO_VERTICAL = {
-    "MPMET": "Metal",        "MET": "Metal",
+    "MPMET": "End Generator",        "MET": "End Generator",
     "MPPET": "Plastic",      "PET": "Plastic",
     "REW": "ReWerse",        "MPRE": "ReWerse",
     "MPREC": "Re-Commerce",  "REC": "Re-Commerce",
@@ -50,8 +50,8 @@ PREFIX_TO_VERTICAL = {
 # Legacy (old defaulter) customers, subtracted from the vertical's receivable.
 # Matched case-insensitively as a substring of customer_name. Maintain per vertical.
 LEGACY_CUSTOMERS = {
-    "Metal": ["HIMGIRI ISPAT", "MAV STEEL", "SHIVAAY RECYCLING", "MOHIT FURNACE"],
-    "Plastic": ["VANSH POLYPACK", "INDIA POLYMERS", "VERDE POLYSFY", "HALIFAX GREENTECH",
+    "End Generator": ["HIMGIRI ISPAT", "MAV STEEL", "SHIVAAY RECYCLING", "MOHIT FURNACE"],
+    "Plastic": ["PANCHTATVA", "KRUTI PACKAGING", "INDIA POLYMERS", "VERDE POLYSFY", "HALIFAX GREENTECH",
                 "MLS INDUSTRIES", "EMINENT DEALERS", "NITIKA POLYMER", "PUSHPANJALI ENTERPRISES",
                 "SHLOK AND SANS", "A N SERVICE ENTERPRISES", "SHREE SALASAR POLYFLEX",
                 "PAL INDUSTRIES", "JAI JEEN MATA", "MAA DURGA INDUSTRIES"],

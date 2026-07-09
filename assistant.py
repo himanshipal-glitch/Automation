@@ -60,9 +60,9 @@ KEY RULES:
   for an April shipment shows in May, not April). Receivables/Payables are frozen
   month-end balances (not summed).
 
-SCOPE — 7 verticals automated: End Generator (a.k.a. Metal in the tool), Plastic,
-Re-Commerce, ITAD, AFR, M4, Enterprise (IB B2B). OUT OF SCOPE: ReWerse and the
-Processing Center (IB Warehouse) — handled manually.
+SCOPE — 7 verticals automated: End Generator, Plastic,
+Re-Commerce, ITAD, AFR, M4, Enterprise. OUT OF SCOPE: ReWerse and the
+Processing Center — handled manually.
 
 THE FREEZE (why closed months never change): the Zoho MIS export is ROLLING — it
 only carries recent invoices — so closed months (Apr, May, …) are read from the

@@ -24,13 +24,12 @@ from reports import SUMMARY_METRICS   # keep row order in sync with the live sum
 # file-name vertical keyword → (app tab label, candidate summary sheet names)
 _VERTICAL_MAP = [
     ("endgenerator", "Metal",       ["Summary"]),
-    ("itad",         "IT AD",       ["Summary"]),
-    ("plastic",      "Plastic",     ["Summary"]),
+    ("itad",         "IT AD",       ["IT AD", "Summary"]),
+    ("endgenerator", "End Generator",       ["Summary"]),
     ("recommerce",   "Re-Commerce", ["Summary"]),
     ("afr",          "AFR",         ["Summary"]),
-    ("m4",           "M4",          ["Summary"]),
-    ("rewerse",      "ReWerse",     ["Summary"]),
-    ("enterprise",   "IB(B2B)",     ["Enterprise", "Summary"]),
+    ("m4",           "M4",          ["M4", "Summary"]),
+    ("enterprise",   "Enterprise",     ["Enterprise", "Summary"]),
 ]
 
 # money rows are rounded to 0, ratios/per-kg to 2, counts are ints, %-rows scale ×100
@@ -443,9 +442,11 @@ if __name__ == "__main__":
     print("Latest per-vertical files picked:")
     for tab, (p, sh, till) in files.items():
         print(f"  {tab:14} <- {os.path.basename(p)}  (till {till.date()})")
-    fc = frozen_columns(folder)
-    for tab in ["IT AD", "Metal", "IB(B2B)", "All Categories"]:
-        cols = fc.get(tab, {})
+    # Check that required tabs are present.
+    for tab in ["IT AD", "End Generator", "Enterprise", "All Categories"]:
+        if tab not in files:
+            continue
+        cols = frozen_columns(folder).get(tab, {})
         print(f"\n=== {tab} ===")
         for m in sorted(cols, key=lambda x: _mdt(x)):
             c = cols[m]

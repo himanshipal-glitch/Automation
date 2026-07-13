@@ -17,6 +17,40 @@ import numpy as np
 # CATEGORY-WISE PROFITABILITY SPLIT
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _fifo_net_unused(sub: pd.DataFrame) -> float:
+    """Receivable total AFTER applying each customer's unused credit balance
+    against their OWN open invoices, oldest invoice date first (FIFO) — a
+    credit settles the oldest outstanding bill before spilling onto newer ones.
+    `sub` is an AR-aging subset (one or more invoice rows per customer)."""
+    import receivables as _recv
+    bal_c  = _recv._col(sub, "balance")
+    cust_c = _recv._col(sub, "customer_name", "customer name")
+    if not bal_c:
+        return 0.0
+    if not cust_c:
+        return float(pd.to_numeric(sub[bal_c], errors="coerce").fillna(0).sum())
+    un_c   = _recv._col(sub, "unused_credits_receivable_amount", "unused_credits")
+    date_c = _recv._col(sub, "date")
+
+    d = sub.copy()
+    d["_bal"]    = pd.to_numeric(d[bal_c], errors="coerce").fillna(0.0)
+    d["_cust"]   = d[cust_c].astype(str).str.upper().str.strip()
+    d["_unused"] = pd.to_numeric(d[un_c], errors="coerce").fillna(0.0) if un_c else 0.0
+    d["_dt"]     = pd.to_datetime(d[date_c], errors="coerce") if date_c else pd.NaT
+
+    total = 0.0
+    for _, grp in d.groupby("_cust"):
+        credit = float(grp["_unused"].max())            # one credit value per customer
+        for _, row in grp.sort_values("_dt", na_position="last").iterrows():  # oldest first
+            bal = float(row["_bal"])
+            if credit > 0 and bal > 0:
+                applied = min(bal, credit)
+                bal -= applied
+                credit -= applied
+            total += bal
+    return total
+
+
 def _ib_has_vendor_invoice(df: pd.DataFrame, ship: pd.Series) -> pd.Series:
     """Per-row boolean: does this shipment have ANY vendor (purchase) invoice?
     IB(B2B) shipments with only logistics bills and no material purchase invoice
@@ -724,7 +758,9 @@ def summaries_by_category(profit_df: pd.DataFrame,
                 if _tn and _bc:
                     _b2b_invs = set(main_df[b2b].iloc[:, 39].astype(str).str.strip()) - {"", "nan"}
                     _sel = ar_df[ar_df[_tn].astype(str).str.strip().isin(_b2b_invs)]
-                    _ib_recv = float(pd.to_numeric(_sel[_bc], errors="coerce").fillna(0).sum())
+                    # net unused credits FIFO — each customer's credit settles
+                    # their oldest open invoice first, then spills onto newer ones
+                    _ib_recv = _fifo_net_unused(_sel)
             out["IB(B2B)"]       = summary_report(main_df[b2b], _ar("IB(B2B)"), _ap("IB(B2B)"),
                                                   recv_override=_ib_recv, pay_override=_pay_net("IB(B2B)"),
                                                   axis_end=_axis_end)
@@ -805,6 +841,143 @@ def top_materials(profit_df: pd.DataFrame, tab: str, n: int = 5):
     return pd.DataFrame(rows), month, share
 
 
+# Summary row positions (0-indexed into SUMMARY_METRICS) highlighted in every
+# vertical block: the Receivable/Payable parent rows + their FY27/Old splits.
+_RP_HIGHLIGHT_ROWS = [15, 16, 17, 19, 20, 21]
+
+# Indian digit grouping, single (non-conditional) custom format codes: the last
+# explicit comma-group size (2 digits) repeats automatically for any higher
+# magnitude, giving 3-2-2-2… grouping (12,34,56,789) for any value, no
+# per-magnitude conditions needed.
+_INR_INT = "#,##,##0"          # whole numbers: money, counts, days
+_INR_DEC = "#,##,##0.00"       # 2-decimal: quantity, per-kg rates
+_PCT_FMT = '0.00"%"'           # value is ALREADY the percent number (14.43 = 14.43%)
+                                # — a literal suffix, NOT Excel's native % (which
+                                # would multiply by 100 again and show 1443.00%).
+
+# Per-row (0-indexed into SUMMARY_METRICS, 28 rows) number format for the
+# Summary sheet — known exactly since every vertical block has this fixed shape.
+_ROW_NUMFMT = {
+    0: _INR_DEC,   1: _INR_INT,  2: _INR_INT,  3: _INR_INT,  4: _PCT_FMT,
+    5: _INR_INT,   6: _INR_INT,  7: _PCT_FMT,  8: _INR_DEC,  9: _INR_DEC,
+    10: _INR_DEC, 11: _INR_INT, 12: _INR_INT, 13: _INR_INT, 14: _INR_INT,
+    15: _INR_INT, 16: _INR_INT, 17: _INR_INT, 18: _INR_INT, 19: _INR_INT,
+    20: _INR_INT, 21: _INR_INT, 22: _INR_INT, 23: _INR_INT, 24: _INR_INT,
+    25: _PCT_FMT, 26: _INR_INT, 27: _PCT_FMT,
+}
+
+
+def _style_workbook(raw: bytes, headers: list[tuple[str, int]],
+                    highlights: list[tuple[str, int]],
+                    summary_numfmt: list[tuple[str, int, str]]) -> bytes:
+    """Post-process the workbook: black header rows (white bold text), a soft
+    highlight on the Receivable/Payable (+FY27/Old) rows, Indian-grouped number
+    formatting everywhere, and auto-fit column widths — so nobody has to
+    manually resize columns or fight Excel's Western comma grouping again."""
+    import io as _io
+    import datetime as _dt
+    from openpyxl import load_workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+    wb = load_workbook(_io.BytesIO(raw))
+    header_fill = PatternFill("solid", fgColor="000000")
+    header_font = Font(bold=True, color="FFFFFF")
+    highlight_fill = PatternFill("solid", fgColor="FFF2CC")
+    highlight_font = Font(bold=True, color="000000")
+
+    for sheet, r in headers:
+        if sheet not in wb.sheetnames:
+            continue
+        ws = wb[sheet]
+        for cell in ws[r]:
+            if cell.value is None:
+                continue
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(vertical="center")
+
+    for sheet, r in highlights:
+        if sheet not in wb.sheetnames:
+            continue
+        ws = wb[sheet]
+        for cell in ws[r]:
+            if cell.value is None:
+                continue
+            cell.fill = highlight_fill
+            cell.font = highlight_font
+
+    def _is_num(v):
+        return isinstance(v, (int, float)) and not isinstance(v, bool) \
+            and not (isinstance(v, float) and (v != v))   # exclude NaN
+
+    # Summary sheet: exact per-row format (known row semantics)
+    for sheet, r, fmt in summary_numfmt:
+        if sheet not in wb.sheetnames:
+            continue
+        ws = wb[sheet]
+        for cell in ws[r]:
+            if cell.column == 1 or not _is_num(cell.value):
+                continue
+            cell.number_format = fmt
+
+    # Every other sheet: Indian-group any numeric cell, scoped to each header's
+    # own table extent (sheets like Receivables/Payables stack several small
+    # tables, so formatting must not bleed from one table's columns into the
+    # next). % is detected from the header text; decimals from the data itself.
+    by_sheet: dict[str, list[int]] = {}
+    for sheet, r in headers:
+        if sheet == "Summary":
+            continue
+        by_sheet.setdefault(sheet, []).append(r)
+
+    for sheet, hdr_rows in by_sheet.items():
+        ws = wb[sheet]
+        hdr_rows = sorted(hdr_rows)
+        for i, hr in enumerate(hdr_rows):
+            end = (hdr_rows[i + 1] - 2) if i + 1 < len(hdr_rows) else ws.max_row
+            # stop early at the first fully-blank row (a table ends before that)
+            for rr in range(hr + 1, end + 1):
+                if all(c.value is None for c in ws[rr]):
+                    end = rr - 1
+                    break
+            for col_idx in range(1, ws.max_column + 1):
+                header_val = ws.cell(row=hr, column=col_idx).value
+                is_pct = isinstance(header_val, str) and "%" in header_val
+                has_dec = any(
+                    _is_num(ws.cell(row=rr, column=col_idx).value)
+                    and abs(ws.cell(row=rr, column=col_idx).value
+                            - round(ws.cell(row=rr, column=col_idx).value)) > 1e-9
+                    for rr in range(hr + 1, end + 1))
+                fmt = _PCT_FMT if is_pct else (_INR_DEC if has_dec else _INR_INT)
+                for rr in range(hr + 1, end + 1):
+                    cell = ws.cell(row=rr, column=col_idx)
+                    if _is_num(cell.value):
+                        cell.number_format = fmt
+
+    # auto-fit column widths (openpyxl has no native autofit — size from content)
+    for ws in wb.worksheets:
+        widths: dict[int, int] = {}
+        for row in ws.iter_rows():
+            for cell in row:
+                if cell.value is None:
+                    continue
+                v = cell.value
+                if isinstance(v, (_dt.date, _dt.datetime)):
+                    disp = v.strftime("%d-%b-%Y")
+                elif _is_num(v) and cell.number_format not in ("General", None):
+                    disp = f"{v:,.2f}" if "." in cell.number_format else f"{v:,.0f}"
+                else:
+                    disp = str(v)
+                widths[cell.column] = max(widths.get(cell.column, 0), len(disp))
+        for col_idx, w in widths.items():
+            letter = ws.cell(row=1, column=col_idx).column_letter
+            ws.column_dimensions[letter].width = min(max(w + 2, 10), 45)
+
+    out = _io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
+
 def combined_workbook(summaries: dict[str, pd.DataFrame],
                       profit_df: pd.DataFrame,
                       ar_df: pd.DataFrame | None = None,
@@ -815,6 +988,10 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
     otherwise all verticals are included (stacked by type)."""
     import io as _io
     import receivables as _recv
+
+    _headers: list[tuple[str, int]] = []      # (sheet, 1-indexed excel row) -> black header style
+    _highlights: list[tuple[str, int]] = []   # (sheet, 1-indexed excel row) -> R/P soft highlight
+    _numfmt: list[tuple[str, int, str]] = []  # (sheet, 1-indexed excel row, format) -> Summary rows
 
     buf = _io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
@@ -828,6 +1005,13 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
             pd.DataFrame([[f"■ {k}"]]).to_excel(w, sheet_name="Summary", startrow=row, startcol=0,
                                                 index=False, header=False)
             df.to_excel(w, sheet_name="Summary", startrow=row + 1, index=False)
+            _hdr_row = row + 2   # 1-indexed excel row of this block's header
+            _headers.append(("Summary", _hdr_row))
+            for _i in _RP_HIGHLIGHT_ROWS:
+                if _i < len(df):
+                    _highlights.append(("Summary", _hdr_row + 1 + _i))
+            for _i in range(len(df)):
+                _numfmt.append(("Summary", _hdr_row + 1 + _i, _ROW_NUMFMT.get(_i, _INR_DEC)))
             row += len(df) + 3
 
         # ── Sheet 2: Receivables (build-up table + Legacy box + detail) ───────
@@ -846,6 +1030,7 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
             pd.DataFrame([["NET RECEIVABLE = Gross − Legacy − Unused Credits"]]).to_excel(
                 w, sheet_name="Receivables", startrow=0, startcol=0, index=False, header=False)
             summ.to_excel(w, sheet_name="Receivables", startrow=1, index=False)
+            _headers.append(("Receivables", 2))
             r = len(summ) + 4
             # 2) Legacy box — the customers whose balances are excluded from Net
             pd.DataFrame([["LEGACY — customers excluded from Net Receivable"]]).to_excel(
@@ -862,6 +1047,7 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
                                          "Outstanding (excluded)": round(float(amt), 2)})
             if leg_rows:
                 pd.DataFrame(leg_rows).to_excel(w, sheet_name="Receivables", startrow=r, index=False)
+                _headers.append(("Receivables", r + 1))
                 r += len(leg_rows) + 3
             else:
                 pd.DataFrame([["(no legacy customers for this selection)"]]).to_excel(
@@ -873,6 +1059,7 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
                       "currency_code", "balance_fcy", "amount_fcy", "exchange_rate")]
             det_out = det.drop(columns=_drop, errors="ignore")
             det_out.to_excel(w, sheet_name="Receivables", startrow=r, index=False)
+            _headers.append(("Receivables", r + 1))
 
         # ── Sheet 3: Payables (AP by vendor vertical) ─────────────────────────
         if ap_df is not None and not getattr(ap_df, "empty", True):
@@ -899,9 +1086,12 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
                        .rename(columns={_bc: "Payable"}))
                 tot.columns = ["Vendor Vertical", "Payable"]
                 tot.to_excel(w, sheet_name="Payables", startrow=0, index=False)
+                _headers.append(("Payables", 1))
                 ap.to_excel(w, sheet_name="Payables", startrow=len(tot) + 3, index=False)
+                _headers.append(("Payables", len(tot) + 4))
             else:
                 ap.to_excel(w, sheet_name="Payables", index=False)
+                _headers.append(("Payables", 1))
 
         # ── Sheet 4: Profitability Report — whole FY, ONE uniform schema ─────
         # Every row (frozen months from the manual files' Details + live months
@@ -969,6 +1159,7 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
             _rep = _live_src.copy()
             _rep["Row Source"] = "Live (MIS)"
         _rep.to_excel(w, sheet_name="Profitability Report", index=False)
+        _headers.append(("Profitability Report", 1))
 
         # ── Sheets 5 & 6: Supplier / Buyer metrics — computed over the SAME
         # whole-FY rows as the Profitability Report sheet, so party totals
@@ -976,7 +1167,9 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
         try:
             _mrep = _rep.drop(columns=["Row Source"], errors="ignore")
             supplier_summary(_mrep).to_excel(w, sheet_name="Supplier Metrics", index=False)
+            _headers.append(("Supplier Metrics", 1))
             buyer_summary(_mrep).to_excel(w, sheet_name="Buyer Metrics", index=False)
+            _headers.append(("Buyer Metrics", 1))
         except Exception:
             pass    # metrics are additive extras — never block the workbook
 
@@ -984,9 +1177,10 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
         pd.DataFrame(COLUMN_GUIDE,
                      columns=["Column", "Side / Source", "GST", "What it is"]) \
             .to_excel(w, sheet_name="Column Guide", index=False)
+        _headers.append(("Column Guide", 1))
 
     buf.seek(0)
-    return buf.read()
+    return _style_workbook(buf.read(), _headers, _highlights, _numfmt)
 
 
 def category_reports_excel(category_dfs: dict[str, pd.DataFrame]) -> bytes:

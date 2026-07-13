@@ -23,15 +23,36 @@ from reports import SUMMARY_METRICS   # keep row order in sync with the live sum
 
 # file-name vertical keyword → (app tab label, candidate summary sheet names)
 _VERTICAL_MAP = [
-    ("endgenerator", "Metal",       ["Summary"]),
-    ("itad",         "IT AD",       ["Summary"]),
-    ("plastic",      "Plastic",     ["Summary"]),
-    ("recommerce",   "Re-Commerce", ["Summary"]),
-    ("afr",          "AFR",         ["Summary"]),
-    ("m4",           "M4",          ["Summary"]),
-    ("rewerse",      "ReWerse",     ["Summary"]),
-    ("enterprise",   "IB(B2B)",     ["Enterprise", "Summary"]),
+    ("endgenerator", "End Generator", ["Summary"]),
+    ("itad",         "IT AD",         ["IT AD", "Summary"]),
+    ("plastic",      "Plastic",       ["Summary"]),
+    ("recommerce",   "Re-Commerce",   ["Summary"]),
+    ("afr",          "AFR",           ["Summary"]),
+    ("m4",           "M4",            ["M4", "Summary"]),
+    ("rewerse",      "ReWerse",       ["Summary"]),
+    ("enterprise",   "Enterprise",    ["Enterprise", "Summary"]),
 ]
+
+# Recykal is mid-transition on a couple of vertical names — the live Zoho MIS
+# export may still say the OLD name (e.g. "Metal", "IB(B2B)") in its Account
+# field while the manual per-vertical report files already use the NEW name
+# (matched via _VERTICAL_MAP above). Mirror frozen data under both spellings
+# so the freeze finds a match regardless of which name today's export uses.
+_TAB_ALIASES = {
+    "End Generator": ["Metal"],
+    "Enterprise": ["IB(B2B)"],
+    "Processing Center": ["IB(Warehouse)"],
+}
+
+
+def _apply_tab_aliases(d: dict) -> None:
+    """Mutates `d` in place: for every canonical tab present, also expose its
+    value under each known OLD-name alias (only if the alias isn't already a
+    real key — never overwrite genuinely distinct data)."""
+    for canon, olds in _TAB_ALIASES.items():
+        if canon in d:
+            for old in olds:
+                d.setdefault(old, d[canon])
 
 # money rows are rounded to 0, ratios/per-kg to 2, counts are ints, %-rows scale ×100
 # Row indexes follow reports.SUMMARY_METRICS (28 rows):
@@ -241,7 +262,8 @@ def frozen_columns(folder: str) -> dict:
                 and (_mdt(m) + pd.offsets.MonthEnd(0)) <= till}
         if cols:
             per[tab] = cols
-    per["All Categories"] = _aggregate_all(per)
+    per["All Categories"] = _aggregate_all(per)   # BEFORE aliasing — avoid double-counting
+    _apply_tab_aliases(per)
     if k is not None:
         _CACHE[k] = per
     return per
@@ -381,6 +403,7 @@ def frozen_details(folder: str) -> dict:
         keep = mdt.notna() & (mdt >= fy_start) & ((mdt + pd.offsets.MonthEnd(0)) <= till)
         if keep.any():
             out[tab] = (df[keep], set(mstr[keep]))
+    _apply_tab_aliases(out)
     if k is not None:
         _CACHE[k] = out
     return out
@@ -443,9 +466,11 @@ if __name__ == "__main__":
     print("Latest per-vertical files picked:")
     for tab, (p, sh, till) in files.items():
         print(f"  {tab:14} <- {os.path.basename(p)}  (till {till.date()})")
-    fc = frozen_columns(folder)
-    for tab in ["IT AD", "Metal", "IB(B2B)", "All Categories"]:
-        cols = fc.get(tab, {})
+    # Check that required tabs are present.
+    for tab in ["IT AD", "End Generator", "Enterprise", "All Categories"]:
+        if tab not in files:
+            continue
+        cols = frozen_columns(folder).get(tab, {})
         print(f"\n=== {tab} ===")
         for m in sorted(cols, key=lambda x: _mdt(x)):
             c = cols[m]

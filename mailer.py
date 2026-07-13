@@ -35,7 +35,7 @@ def get_email_config() -> dict:
                 "recipients": list(e.get("recipients", [])),
                 # optional: per-vertical recipient lists, e.g.
                 #   [email.recipients_by_vertical]
-                #   Metal = ["metal.owner@recykal.com"]
+                #   End Generator = ["metal.owner@recykal.com"]
                 "recipients_by_vertical": dict(e.get("recipients_by_vertical", {})),
             }
     except Exception:

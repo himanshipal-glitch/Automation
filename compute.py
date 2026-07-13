@@ -146,7 +146,7 @@ def _s(df: pd.DataFrame, col: str, default=0):
     return pd.Series(default, index=df.index, dtype=type(default))
 
 
-def _dt_str(series, fmt="%Y-%m-%d"):
+def _dt_str(series, fmt="%Y-%m-%d %H:%M:%S"):
     return pd.to_datetime(series, errors="coerce").dt.strftime(fmt).fillna("")
 
 
@@ -220,17 +220,17 @@ def build_profitability(merged_df: pd.DataFrame,
     _GST = 1.18
     BZ = (dn1_sub + dn2_sub) / _GST     # Actual DN (ex-GST goods value)
 
-    # ── Metal resell linkage ───────────────────────────────────────────────────
-    # A Metal shipment that was fully reversed AND returned to the seller (full
+    # ── End Generator resell linkage ───────────────────────────────────────────────────
+    # An End Generator shipment that was fully reversed AND returned to the seller (full
     # CN + DN) can be re-purchased and re-sold under a NEW shipment id with the
     # SAME material + quantity. Following the manual, the RESALE keeps the
     # ORIGINAL bill's purchase cost (not the new rebuy bill); both legs are
-    # flagged so resold items are visible. Metal only — no merging of rows, so
+    # flagged so resold items are visible. End Generator only — no merging of rows, so
     # no double-count (the returned leg still nets to 0 via its own CN/DN).
     _resale_note = pd.Series("", index=d.index)
     try:
         _ship_r  = _s(d, "CFSO_Number", "").astype(str).str.strip()
-        _ismetal = _s(d, "Account_inv", "").astype(str).str.contains("metal", case=False, na=False)
+        _ismetal = _s(d, "Account_inv", "").astype(str).str.contains("metal|end generator", case=False, na=False)
         _mat_r   = _s(d, "Item_Name", "").astype(str).str.strip()
         _gr = pd.DataFrame({"sid": _ship_r, "metal": _ismetal, "mat": _mat_r,
                             "sale": AX, "cn": BY, "dn": BZ, "qty": O})
@@ -300,11 +300,11 @@ def build_profitability(merged_df: pd.DataFrame,
     #   ...AND only if the SHIPMENT has NO actual Credit Note on ANY of its rows.
     #      If any row of a shipment has a CN, the WHOLE shipment is excluded
     #      (treated like it's in the query sheet) — no provision on any of its rows.
-    # Provision rate is per Broad Category:  ReWerse 2.5%, Metal 4.55%, Plastic 2.5%.
+    # Provision rate is per Broad Category:  ReWerse 2.5%, End Generator 4.55%, Plastic 2.5%.
     _bcat   = _s(d, "Account_inv", "").astype(str)
     _rate   = pd.Series(0.0, index=d.index)
     _rate[_bcat.str.contains("rewerse", case=False, na=False)] = 0.025
-    _rate[_bcat.str.contains("metal",   case=False, na=False)] = 0.0455
+    _rate[_bcat.str.contains("metal|end generator",   case=False, na=False)] = 0.0455
     _rate[_bcat.str.contains("plastic", case=False, na=False)] = 0.025
     _excluded   = _s(d, "_no_dn_excluded", 0).astype(float)
     _ship_key   = _s(d, "CFSO_Number", "").astype(str).str.strip()
@@ -456,7 +456,7 @@ def build_profitability(merged_df: pd.DataFrame,
     cols = [
         # Raw Data
         ("Quarter",                  _fiscal_quarter(_s(d, "Invoice_Date", ""))),
-        ("Month",                    inv_date.dt.strftime("%B").fillna("")),
+        ("Month",                    inv_date.dt.strftime("%b-%y").fillna("")),
         ("Date",                     _dt_str(_s(d, "Invoice_Date", ""))),
         ("Shipment ID",              _s(d, "CFSO_Number", "")),
 
@@ -582,7 +582,7 @@ def build_profitability(merged_df: pd.DataFrame,
         ("SD",                       pd.Series("", index=d.index)),
         # provenance of the cost on each row (where the purchase cost came from)
         ("Cost Source",              _s(d, "_cost_source", "")),
-        # resold-item flag (Metal return-to-seller → re-purchase → resale)
+        # resold-item flag (End Generator return-to-seller → re-purchase → resale)
         ("Resale Note",              _resale_note),
     ]
 

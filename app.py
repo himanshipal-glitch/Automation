@@ -107,7 +107,7 @@ with st.sidebar:
     st.markdown("---")
     # build tag — bump when pushing significant changes; confirms which version
     # a deployed instance is running (hosted apps can lag behind the repo)
-    st.caption("build: **v1.6 — Indian number format + Excel styling**")
+    st.caption("build: **v1.7 — merged: renames + group headers + Indian format**")
     status = db.all_db_status()
     loaded = [s for s, v in status.items() if v["exists"]]
     st.caption(f"{len(loaded)} / {len(status)} sheets loaded")
@@ -249,7 +249,7 @@ _components.html(
   // ("IT AD"→"itad", "IB(B2B)"→"ibb2b") so spaces/brackets don't make the match miss.
   const VERTS=[['endgenerator','END GENERATOR'],['metal','METAL'],['plastic','PLASTIC'],
     ['recommerce','RE-COMMERCE'],['itad','IT AD'],['afr','AFR'],['m4','M4'],
-    ['ibb2b','IB(B2B)'],['ibwarehouse','IB(WAREHOUSE)'],['enterprise','ENTERPRISE'],
+    ['ibb2b','ENTERPRISE'],['ibwarehouse','PROCESSING CENTER'],['enterprise','ENTERPRISE'],
     ['rewerse','REWERSE']];
   R.quip=function(t){t=(t||'').toLowerCase();if(!t)return null;
     if(t.includes('download'))return 'Ohh — grabbing the sheets? 📊';
@@ -1128,7 +1128,7 @@ elif page == "Merge & Compute":
         st.markdown("### Category-wise Profitability Reports")
         st.markdown(
             "One report per **Broad Category**. Institutional Business is split into "
-            "**IB(B2B)** (Shipment ID starts with `SHID`) and **IB(Warehouse)** (the rest)."
+            "**Enterprise** (Shipment ID starts with `SHID`) and **Processing Center** (the rest)."
         )
 
         cat_dfs = reports.split_by_category(profit_df)

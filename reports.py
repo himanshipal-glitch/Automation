@@ -199,6 +199,16 @@ def _is_mp_ship(ship: pd.Series) -> pd.Series:
     return core.str.startswith("MP")
 
 
+# Verticals that KEEP their MP shipments (real sales booked via marketplace/offline
+# orders), rather than dropping them as warehouse-internal movements. Matched
+# case-insensitively against the Broad Category text.
+_MP_KEEP_RE = r"re-commerce|recommerce|afr|metal|end generator|plastic"
+
+
+def _keeps_mp(cat: pd.Series) -> pd.Series:
+    return cat.str.contains(_MP_KEEP_RE, case=False, na=False)
+
+
 def split_by_category(profit_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     """
     Split the full profitability report into one report per Broad Category.
@@ -238,10 +248,11 @@ def split_by_category(profit_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         else:
             label = c if c and c.lower() != "nan" else "Uncategorised"
             # MP (warehouse) movements don't belong to the vertical's report —
-            # except Re-Commerce, whose MP sales are genuine (costed from older
-            # bills). Kept in a separate 'Warehouse (MP)' report so the detail
-            # sums cross-check the summary.
-            if "re-commerce" not in str(c).lower() and "recommerce" not in str(c).lower():
+            # except the verticals whose MP/offline orders are genuine sales
+            # (Re-Commerce, AFR, Metal/End Generator, Plastic). For everyone else
+            # MP rows go to a separate 'Warehouse (MP)' report so the detail sums
+            # still cross-check the summary.
+            if not _keeps_mp(pd.Series([c])).iloc[0]:
                 mp_mask = mask & _is_mp_ship(ship)
                 mask = mask & ~_is_mp_ship(ship)
                 if mp_mask.any():
@@ -641,12 +652,12 @@ def summaries_by_category(profit_df: pd.DataFrame,
     ship_all = profit_df.iloc[:, 3].astype(str).str.strip()    # Shipment ID
     cat_all  = profit_df.iloc[:, 85].astype(str)               # Broad Category
 
-    # MP-prefixed shipments are WAREHOUSE movements and are normally excluded —
-    # EXCEPT Re-Commerce, whose MP/RECM sales are now costed from the older
-    # bills, so they DO count in the Re-Commerce summary.
+    # MP-prefixed shipments are WAREHOUSE movements, normally excluded — EXCEPT
+    # for verticals whose MP/offline orders are genuine sales: Re-Commerce, AFR,
+    # Metal (End Generator) and Plastic. Those keep their MP rows.
     is_mp = _is_mp_ship(ship_all)
-    is_rc = cat_all.str.contains("Re-Commerce", case=False, na=False)
-    exclude = is_mp & ~is_rc
+    keep_mp = _keeps_mp(cat_all)
+    exclude = is_mp & ~keep_mp
     main_df = profit_df[~exclude]
     mp_df   = profit_df[exclude]
 
@@ -792,10 +803,10 @@ def top_materials(profit_df: pd.DataFrame, tab: str, n: int = 5):
     ship = w["Shipment_ID"].astype(str).str.strip()
     cat  = w["Broad_Category"].astype(str)
 
-    # same scoping as summaries_by_category: MP-warehouse rows excluded (except RC)
+    # same scoping as summaries_by_category: MP-warehouse rows excluded, except
+    # for the verticals whose MP/offline orders are real sales
     is_mp = _is_mp_ship(ship)
-    is_rc = cat.str.contains("Re-Commerce", case=False, na=False)
-    w = w[~(is_mp & ~is_rc)]
+    w = w[~(is_mp & ~_keeps_mp(cat))]
     ship = w["Shipment_ID"].astype(str).str.strip().str.upper()
     cat  = w["Broad_Category"].astype(str)
 
@@ -844,8 +855,9 @@ def top_materials(profit_df: pd.DataFrame, tab: str, n: int = 5):
 
 
 # Summary row positions (0-indexed into SUMMARY_METRICS) highlighted in every
-# vertical block: the Receivable/Payable parent rows + their FY27/Old splits.
-_RP_HIGHLIGHT_ROWS = [15, 16, 17, 19, 20, 21]
+# vertical block: Gross/Net Margin % (4, 7) + the Receivable/Payable parent rows
+# and their FY27/Old splits.
+_SUMMARY_HIGHLIGHT_ROWS = [4, 7, 15, 16, 17, 19, 20, 21]
 
 # Indian digit grouping, single (non-conditional) custom format codes: the last
 # explicit comma-group size (2 digits) repeats automatically for any higher
@@ -1010,7 +1022,7 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
             df.to_excel(w, sheet_name="Summary", startrow=row + 1, index=False)
             _hdr_row = row + 2   # 1-indexed excel row of this block's header
             _headers.append(("Summary", _hdr_row))
-            for _i in _RP_HIGHLIGHT_ROWS:
+            for _i in _SUMMARY_HIGHLIGHT_ROWS:
                 if _i < len(df):
                     _highlights.append(("Summary", _hdr_row + 1 + _i))
             for _i in range(len(df)):

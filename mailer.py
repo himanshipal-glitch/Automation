@@ -197,6 +197,9 @@ def summary_html(df, vertical: str, intro: str, regards: str = "Regards",
         f'<th style="background:#1a1a1a;color:#fff;padding:5px 10px;'
         f'border:1px solid #444;font-size:13px;">{c}</th>' for c in cols)
     rows_html = []
+    # Gross/Net Margin % rows get an amber highlight (matches the Excel Summary
+    # sheet); their key figures the team scans first.
+    _highlight_metrics = {"gross margin (%)", "net margin (%)"}
     for _, r in df.iterrows():
         metric = str(r["Metric"])
         tds, pct_row = [], False
@@ -205,6 +208,8 @@ def summary_html(df, vertical: str, intro: str, regards: str = "Regards",
             pct_row = pct_row or is_pct
             tds.append(txt)
         sty = "color:#1f4fd8;font-style:italic;" if pct_row else ""
+        if metric.strip().lower() in _highlight_metrics:
+            sty += "background:#fff2cc;"
         cells = "".join(
             f'<td style="padding:4px 10px;border:1px solid #bbb;text-align:right;'
             f'font-size:13px;{sty}">{t}</td>' for t in tds)

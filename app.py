@@ -107,7 +107,7 @@ with st.sidebar:
     st.markdown("---")
     # build tag — bump when pushing significant changes; confirms which version
     # a deployed instance is running (hosted apps can lag behind the repo)
-    st.caption("build: **v2.4 — Re-Commerce: add only new MIS shipments (dedup by ID)**")
+    st.caption("build: **v2.5 — new Samsung shipments route to Samsung report only**")
     status = db.all_db_status()
     loaded = [s for s, v in status.items() if v["exists"]]
     st.caption(f"{len(loaded)} / {len(status)} sheets loaded")
@@ -1260,10 +1260,15 @@ elif page == "Summary Report":
         if not _ref.empty:
             _known_reco = set(_ref.iloc[:, 3].astype(str).str.strip())
         _variants: dict[str, pd.DataFrame] = {}
+        # New (post-manual) shipments are routed by Samsung membership: the
+        # WITH-Samsung report gets ALL new shipments; the WITHOUT report gets only
+        # the NON-Samsung new ones (Samsung detected by name — see _is_samsung).
         if not _reco_w.empty:
-            _variants["With Samsung"] = reports.apply_recommerce_manual(profit_df, _reco_w, _known_reco)
+            _variants["With Samsung"] = reports.apply_recommerce_manual(
+                profit_df, _reco_w, _known_reco, exclude_samsung_new=False)
         if not _reco_wo.empty:
-            _variants["Without Samsung"] = reports.apply_recommerce_manual(profit_df, _reco_wo, _known_reco)
+            _variants["Without Samsung"] = reports.apply_recommerce_manual(
+                profit_df, _reco_wo, _known_reco, exclude_samsung_new=True)
         if not _variants:
             _variants["Report"] = profit_df
         _reco_skip = {"Re-Commerce"} if (not _reco_w.empty or not _reco_wo.empty) else set()

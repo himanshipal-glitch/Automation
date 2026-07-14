@@ -209,9 +209,19 @@ def _keeps_mp(cat: pd.Series) -> pd.Series:
     return cat.str.contains(_MP_KEEP_RE, case=False, na=False)
 
 
+def _is_samsung(df: pd.DataFrame) -> pd.Series:
+    """Per-row: is this a Samsung shipment? Detected by 'samsung' appearing in the
+    Supplier Name (col 4) or Buyer Name (col 41). Used to route NEW (post-manual)
+    Re-Commerce shipments to the right report variant."""
+    def _c(i):
+        return df.iloc[:, i].astype(str) if df.shape[1] > i else pd.Series("", index=df.index)
+    return (_c(4) + " " + _c(41)).str.lower().str.contains("samsung", na=False)
+
+
 def apply_recommerce_manual(base_df: pd.DataFrame,
                             manual_df: pd.DataFrame | None,
-                            known_ships: set | None = None) -> pd.DataFrame:
+                            known_ships: set | None = None,
+                            exclude_samsung_new: bool = False) -> pd.DataFrame:
     """Drive Re-Commerce from the stored manual detail, adding only the NEW
     shipments from the live MIS. Re-Commerce rows come from `manual_df`
     (accurate cost, no Amazon×Recykal re-costing); a live MIS Re-Commerce row is
@@ -231,8 +241,10 @@ def apply_recommerce_manual(base_df: pd.DataFrame,
     cat = base_df.iloc[:, 85].astype(str)
     is_rc = cat.str.contains(r"re-commerce|recommerce", case=False, na=False)
     ship = base_df.iloc[:, 3].astype(str).str.strip()
-    # keep every non-RC row; add RC rows only for shipments not already known (new)
-    keep = ~is_rc | (is_rc & ~ship.isin(known))
+    new_rc = is_rc & ~ship.isin(known)                 # genuinely new RC shipments
+    if exclude_samsung_new:                            # without-Samsung report:
+        new_rc = new_rc & ~_is_samsung(base_df)        # keep only NON-Samsung new ones
+    keep = ~is_rc | new_rc
     return pd.concat([base_df[keep], m], ignore_index=True)
 
 

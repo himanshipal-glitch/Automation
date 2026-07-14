@@ -114,6 +114,59 @@ def clear_amazon_ytd() -> None:
             p.unlink()
 
 
+# ── Re-Commerce manual detail store (permanent) ───────────────────────────────
+# Re-Commerce's accurate costs live in a manually-maintained detail sheet (same
+# format as the Profitability Report) — used AS-IS for the FY (no Amazon×Recykal
+# re-costing) through its own cutoff date; transactions after the cutoff fall
+# back to the live Amazon×Recykal logic. Maintained in two variants — WITH and
+# WITHOUT Samsung — so two separate reports can be generated.
+RECO_MANUAL_WITH_PATH    = PERSIST_DIR / "recommerce_manual_with_samsung.parquet"
+RECO_MANUAL_WITHOUT_PATH = PERSIST_DIR / "recommerce_manual_without_samsung.parquet"
+
+
+def _reco_manual_path(with_samsung: bool):
+    return RECO_MANUAL_WITH_PATH if with_samsung else RECO_MANUAL_WITHOUT_PATH
+
+
+def save_recommerce_manual(df: pd.DataFrame, with_samsung: bool) -> int:
+    """Persist a Re-Commerce manual detail sheet (full snapshot — replaces)."""
+    if df is None or df.empty:
+        return recommerce_manual_count(with_samsung)
+    nd = df.copy()
+    nd.columns = _uniq_cols([str(c) for c in nd.columns])
+    p = _reco_manual_path(with_samsung)
+    try:
+        nd.to_parquet(p, index=False)
+    except Exception:
+        nd.to_pickle(p.with_suffix(".pkl"))
+    return len(nd)
+
+
+def load_recommerce_manual(with_samsung: bool) -> pd.DataFrame:
+    p = _reco_manual_path(with_samsung)
+    for pp in (p, p.with_suffix(".pkl")):
+        if pp.exists():
+            try:
+                return (pd.read_parquet(pp) if pp.suffix == ".parquet"
+                        else pd.read_pickle(pp))
+            except Exception:
+                pass
+    return pd.DataFrame()
+
+
+def recommerce_manual_count(with_samsung: bool) -> int:
+    return len(load_recommerce_manual(with_samsung))
+
+
+def clear_recommerce_manual(with_samsung: bool | None = None) -> None:
+    paths = ([_reco_manual_path(True), _reco_manual_path(False)]
+             if with_samsung is None else [_reco_manual_path(with_samsung)])
+    for p in paths:
+        for pp in (p, p.with_suffix(".pkl")):
+            if pp.exists():
+                pp.unlink()
+
+
 # ── "CF.DN = No" shipment exclusion list (permanent) ──────────────────────────
 NO_DN_PATH = PERSIST_DIR / "no_dn_shipments.parquet"
 

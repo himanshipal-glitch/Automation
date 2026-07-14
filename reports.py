@@ -209,6 +209,25 @@ def _keeps_mp(cat: pd.Series) -> pd.Series:
     return cat.str.contains(_MP_KEEP_RE, case=False, na=False)
 
 
+def apply_recommerce_manual(base_df: pd.DataFrame,
+                            manual_df: pd.DataFrame | None) -> pd.DataFrame:
+    """Swap Re-Commerce's live rows for the manually-costed detail through the
+    manual's cutoff date. Re-Commerce rows dated ≤ cutoff come from `manual_df`
+    (accurate cost, no Amazon×Recykal re-costing); rows after the cutoff stay
+    live (Amazon×Recykal). Every other vertical is untouched. Returns a new df.
+    Positional: 2 = Date (invoice), 85 = Broad Category."""
+    if manual_df is None or getattr(manual_df, "empty", True):
+        return base_df
+    m = manual_df.reindex(columns=base_df.columns).copy()   # align to engine schema
+    cutoff = pd.to_datetime(m.iloc[:, 2], errors="coerce").max()
+    cat = base_df.iloc[:, 85].astype(str)
+    is_rc = cat.str.contains(r"re-commerce|recommerce", case=False, na=False)
+    dts = pd.to_datetime(base_df.iloc[:, 2], errors="coerce")
+    # keep every non-RC row; keep RC rows only AFTER the cutoff (live Amazon logic)
+    keep = ~is_rc | (is_rc & dts.notna() & (dts > cutoff))
+    return pd.concat([base_df[keep], m], ignore_index=True)
+
+
 def _itad_reco_mask(df: pd.DataFrame) -> pd.Series:
     """ITAD rows whose shipment has a MISSING BILL (no cost source) — a purchase
     bill was never matched. These are pulled out of every calculation and listed

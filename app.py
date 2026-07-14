@@ -107,7 +107,7 @@ with st.sidebar:
     st.markdown("---")
     # build tag — bump when pushing significant changes; confirms which version
     # a deployed instance is running (hosted apps can lag behind the repo)
-    st.caption("build: **v2.0 — July derived rows use residual Sales/Purchases**")
+    st.caption("build: **v2.1 — Re-Commerce manual detail; with/without Samsung reports**")
     status = db.all_db_status()
     loaded = [s for s, v in status.items() if v["exists"]]
     st.caption(f"{len(loaded)} / {len(status)} sheets loaded")
@@ -595,6 +595,22 @@ if page == "Upload Files":
                 results.append({"File": filename, "Sheet": xl.sheet_names[0], "Dataset": "No-DN exclusion (saved)",
                                 "Rows": n, "Status": "✅"})
                 return
+            # Re-Commerce MANUAL DETAIL file (accurate costs, Profitability-sheet
+            # format) — stored in the DB and used AS-IS for Re-Commerce's FY.
+            # Two variants by filename: '… WITHOUT SAMSUNG' vs '… WID/WITH SAMSUNG'.
+            if "recommerce" in low and ("detail" in low or "reco" in low):
+                _with_s = "without" not in low
+                _pick = next((s for s in xl.sheet_names
+                              if any("shipment id" in str(c).strip().lower()
+                                     for c in pd.read_excel(io.BytesIO(file_bytes),
+                                                            sheet_name=s, nrows=1).columns)),
+                             xl.sheet_names[0])
+                rd = pd.read_excel(io.BytesIO(file_bytes), sheet_name=_pick).dropna(how="all")
+                n = db.save_recommerce_manual(rd, _with_s)
+                results.append({"File": filename, "Sheet": _pick,
+                                "Dataset": f"Re-Commerce manual detail ({'WITH' if _with_s else 'WITHOUT'} Samsung)",
+                                "Rows": n, "Status": "✅"})
+                return
             # Amazon × Recykal file — grab the 'YTD Sales' sheet (header on row 4)
             if "YTD Sales" in xl.sheet_names or "amazon" in low or "recykal" in low:
                 if "YTD Sales" in xl.sheet_names:
@@ -677,6 +693,23 @@ if page == "Upload Files":
         if _pd_count and st.button("🗑️ Clear accumulated details", key="clear_pdet"):
             db.clear_profit_details()
             st.success("Accumulated details cleared.")
+            st.rerun()
+
+    _rw_n, _ro_n = db.recommerce_manual_count(True), db.recommerce_manual_count(False)
+    with st.expander(f"🛒 Re-Commerce manual detail — WITH Samsung: {_rw_n:,} · "
+                     f"WITHOUT Samsung: {_ro_n:,} rows"
+                     + ("" if (_rw_n or _ro_n) else " (empty)"), expanded=False):
+        st.caption(
+            "Re-Commerce's accurate costs come from a manually-maintained detail sheet "
+            "(Profitability-Report format). Rows up to its cutoff date are used AS-IS "
+            "(no Amazon×Recykal re-costing); later transactions fall back to the live "
+            "Amazon×Recykal logic. Two versions — WITH and WITHOUT Samsung — each drive a "
+            "separate full report. Upload a file whose name contains 'Recommerce Details' "
+            "(add 'without samsung' for that version)."
+        )
+        if (_rw_n or _ro_n) and st.button("🗑️ Clear Re-Commerce manual detail", key="clear_reco"):
+            db.clear_recommerce_manual()
+            st.success("Re-Commerce manual detail cleared.")
             st.rerun()
 
     _nodn_count = db.no_dn_count()
@@ -1204,66 +1237,89 @@ elif page == "Summary Report":
         ar_df = db.read_table("AR", "raw").drop(columns=["_source_file"], errors="ignore")
         ap_df = db.read_table("AP", "raw").drop(columns=["_source_file"], errors="ignore")
         op_bills = db.load_older_bills()   # comprehensive bills (incl. CFSO-blank) for op-cost
-        summaries = reports.summaries_by_category(
-            profit_df,
-            ar_df if not ar_df.empty else None,
-            ap_df if not ap_df.empty else None,
-            op_cost_bills=op_bills if not op_bills.empty else None,
-        )
-        # ── FREEZE closed months from the per-vertical report files ──────────
-        # The MIS export only carries current open invoices, so closed months
-        # (Apr, May, …) come straight from the manual's own per-vertical
-        # "Profitability Report … till <date>" files sitting in this folder.
-        # Only the latest/open month is computed live.
+        _ar = ar_df if not ar_df.empty else None
+        _ap = ap_df if not ap_df.empty else None
+        _obills = op_bills if not op_bills.empty else None
+
+        import frozen as _frozen
+        _app_dir = str(db.DB_DIR.parent)              # the AUTOMATION folder
+        _pdates = pd.to_datetime(profit_df.iloc[:, 2], errors="coerce")
+        _open_m = _pdates.max().strftime("%b-%y") if _pdates.notna().any() else None
+
+        # ── Re-Commerce WITH / WITHOUT Samsung variants ─────────────────────
+        # If manual Re-Commerce detail(s) are stored, Re-Commerce is driven by
+        # them (≤ cutoff) + live Amazon logic (> cutoff), and we produce a
+        # SEPARATE full report for each variant. Otherwise one report as before.
+        _reco_w = db.load_recommerce_manual(True)
+        _reco_wo = db.load_recommerce_manual(False)
+        _variants: dict[str, pd.DataFrame] = {}
+        if not _reco_w.empty:
+            _variants["With Samsung"] = reports.apply_recommerce_manual(profit_df, _reco_w)
+        if not _reco_wo.empty:
+            _variants["Without Samsung"] = reports.apply_recommerce_manual(profit_df, _reco_wo)
+        if not _variants:
+            _variants["Report"] = profit_df
+        _reco_skip = {"Re-Commerce"} if (not _reco_w.empty or not _reco_wo.empty) else set()
+
+        def _build(_pdf):
+            _s = reports.summaries_by_category(_pdf, _ar, _ap, op_cost_bills=_obills)
+            try:
+                _s = _frozen.apply_frozen(_s, _app_dir, _open_m, skip_tabs=_reco_skip)
+            except Exception as _fe:
+                st.caption(f"⚠ Frozen-month overlay skipped: {_fe}")
+            return _s
+
+        _labels = list(_variants.keys())
+        if len(_labels) > 1:
+            st.caption("Re-Commerce is maintained in two versions — pick which to view; "
+                       "both are downloadable/emailable below.")
+            _sel = st.radio("Re-Commerce version", _labels, horizontal=True, key="reco_variant")
+        else:
+            _sel = _labels[0]
+        _sel_pdf = _variants[_sel]
+        summaries = _build(_sel_pdf)
+        st.session_state["_recy_summaries"] = summaries
+
         try:
-            import frozen as _frozen
-            _app_dir = str(db.DB_DIR.parent)          # the AUTOMATION folder
-            _pdates = pd.to_datetime(profit_df.iloc[:, 2], errors="coerce")
-            _open_m = _pdates.max().strftime("%b-%y") if _pdates.notna().any() else None
-            summaries = _frozen.apply_frozen(summaries, _app_dir, _open_m)
             _frozen_tabs = sorted(set(_frozen.latest_files(_app_dir)))
             if _frozen_tabs and _open_m:
-                _cutoff = _pdates.max().strftime("%d-%b-%Y")
-                st.caption(
-                    f"🔒 Closed months are frozen from the per-vertical report files "
-                    f"(found: {', '.join(_frozen_tabs)}); **{_open_m} is live from MIS "
-                    f"data up to {_cutoff}** — upload a newer MIS for a fuller month.")
-        except Exception as _fe:
-            st.caption(f"⚠ Frozen-month overlay skipped: {_fe}")
-        # give Recy (the assistant) the current numbers to answer data questions
-        st.session_state["_recy_summaries"] = summaries
+                _cut = _pdates.max().strftime("%d-%b-%Y")
+                st.caption(f"🔒 Closed months frozen from the per-vertical report files "
+                           f"({', '.join(_frozen_tabs)}); **{_open_m} live up to {_cut}**"
+                           + ("; Re-Commerce from its manual detail." if _reco_skip else "."))
+        except Exception:
+            pass
 
         sum_tabs = st.tabs(list(summaries.keys()))
         for tab, (name, sdf) in zip(sum_tabs, summaries.items()):
             with tab:
-                if sdf.shape[1] <= 2 and len(profit_df) and sdf.iloc[0, -1] == 0:
+                if sdf.shape[1] <= 2 and len(_sel_pdf) and sdf.iloc[0, -1] == 0:
                     st.info("No data in this category yet.")
                 st.dataframe(sdf, use_container_width=True, hide_index=True, height=640)
                 safe = name.replace("(", "_").replace(")", "").replace("/", "-").replace(" ", "_")
-                # Per-vertical combined workbook (Summary + Receivables + Payables +
-                # Report). The 'All Categories' tab has NO per-tab button — the single
-                # "Download ALL Verticals" button below covers it (avoids duplication).
                 if name != "All Categories":
                     st.download_button(
                         f"⬇ Download {name} (Excel — Summary · Receivables · Payables · Report)",
-                        reports.combined_workbook(summaries, profit_df,
-                                                  ar_df if not ar_df.empty else None,
-                                                  ap_df if not ap_df.empty else None,
-                                                  vertical=name),
+                        reports.combined_workbook(summaries, _sel_pdf, _ar, _ap, vertical=name),
                         file_name=f"profitability_{safe}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         key=f"dl_comb_{name}",
                     )
 
         st.markdown("---")
-        st.download_button(
-            "⬇ Download ALL Verticals (Excel — Summary · Receivables · Payables · Report)",
-            reports.combined_workbook(summaries, profit_df,
-                                      ar_df if not ar_df.empty else None,
-                                      ap_df if not ap_df.empty else None),
-            file_name="profitability_all.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
+        # One "Download ALL" per variant (two when with/without Samsung exist)
+        for _lbl, _pdf in _variants.items():
+            _s = summaries if _lbl == _sel else _build(_pdf)
+            _sfx = "" if _lbl == "Report" else f" — {_lbl}"
+            _fn = "profitability_all" + ("" if _lbl == "Report"
+                                         else "_" + _lbl.lower().replace(" ", "_")) + ".xlsx"
+            st.download_button(
+                f"⬇ Download ALL Verticals{_sfx} (Excel — Summary · Receivables · Payables · Report)",
+                reports.combined_workbook(_s, _pdf, _ar, _ap),
+                file_name=_fn,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=f"dl_all_{_lbl}",
+            )
 
         # ── Email the report to the team ──────────────────────────────────────
         st.markdown("---")
@@ -1298,40 +1354,42 @@ elif page == "Summary Report":
                  "vertical's workbook attached. Per-vertical recipient lists from secrets "
                  "are used when set; otherwise the recipients above.")
 
-        def _mail_html(vert_label, body_text):
+        def _mail_html(_s, vert_label, body_text):
             intro = body_text.replace("\n", "<br>")
-            return _mailer.summary_html(summaries[vert_label], vert_label, intro,
+            return _mailer.summary_html(_s[vert_label], vert_label, intro,
                                         regards="Regards,<br>Profitability Automation Engine")
 
-        def _send_all(rcpts_map=None, only_to=None):
-            """Send per-vertical (rcpts_map) or one combined mail (only_to)."""
+        def _send_all(only_to=None):
+            """Send the report — once per Re-Commerce variant (with/without Samsung),
+            and per vertical if that box is ticked."""
             _rbv = _cfg.get("recipients_by_vertical", {})
             _base_to = [x.strip() for x in _to.split(",") if x.strip()]
             results = []
-            if _per_vertical:
-                for _v in summaries.keys():
-                    if _v == "All Categories":
-                        continue
-                    _wb = reports.combined_workbook(
-                        summaries, profit_df,
-                        ar_df if not ar_df.empty else None,
-                        ap_df if not ap_df.empty else None, vertical=_v)
-                    _rcpts = only_to or _rbv.get(_v, _base_to)
-                    _safe = _v.replace("(", "_").replace(")", "").replace("/", "-").replace(" ", "_")
-                    _vbody = _body.replace("Profitability Report", f"Profitability Report - {_v}")
+            for _lbl, _pdf in _variants.items():
+                _s = summaries if _lbl == _sel else _build(_pdf)
+                _vsfx = "" if _lbl == "Report" else f" — {_lbl}"
+                _fsfx = "" if _lbl == "Report" else "_" + _lbl.lower().replace(" ", "_")
+                if _per_vertical:
+                    for _v in _s.keys():
+                        if _v == "All Categories":
+                            continue
+                        _wb = reports.combined_workbook(_s, _pdf, _ar, _ap, vertical=_v)
+                        _rcpts = only_to or _rbv.get(_v, _base_to)
+                        _safe = _v.replace("(", "_").replace(")", "").replace("/", "-").replace(" ", "_")
+                        _vbody = _body.replace("Profitability Report", f"Profitability Report - {_v}")
+                        _ok, _msg = _mailer.send_report(
+                            _rcpts, f"{_subj} — {_v}{_vsfx}", _vbody, _wb,
+                            f"profitability_{_safe}{_fsfx}.xlsx", _cfg,
+                            html=_mail_html(_s, _v, _vbody))
+                        results.append(f"{'✅' if _ok else '❌'} {_v}{_vsfx}: {_msg}")
+                else:
+                    _wb = reports.combined_workbook(_s, _pdf, _ar, _ap)
                     _ok, _msg = _mailer.send_report(
-                        _rcpts, f"{_subj} — {_v}", _vbody, _wb,
-                        f"profitability_{_safe}.xlsx", _cfg, html=_mail_html(_v, _vbody))
-                    results.append(f"{'✅' if _ok else '❌'} {_v}: {_msg}")
-            else:
-                _wb = reports.combined_workbook(
-                    summaries, profit_df,
-                    ar_df if not ar_df.empty else None,
-                    ap_df if not ap_df.empty else None)
-                _ok, _msg = _mailer.send_report(
-                    only_to or _base_to, _subj, _body, _wb, "profitability_all.xlsx",
-                    _cfg, html=_mail_html("All Categories", _body))
-                results.append(("✅ " if _ok else "❌ ") + _msg)
+                        only_to or _base_to, f"{_subj}{_vsfx}", _body, _wb,
+                        f"profitability_all{_fsfx}.xlsx", _cfg,
+                        html=_mail_html(_s, "All Categories", _body))
+                    results.append(("✅ " if _ok else "❌ ") + f"{_lbl}{_vsfx}: {_msg}"
+                                    if _lbl != "Report" else ("✅ " if _ok else "❌ ") + _msg)
             return results
 
         _c1, _c2 = st.columns([1, 1])

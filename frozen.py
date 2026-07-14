@@ -319,28 +319,35 @@ def _mdt(m: str):
     return pd.to_datetime("01-" + m, format="%d-%b-%y", errors="coerce")
 
 
-def apply_frozen(summaries: dict, folder: str, open_month: str | None) -> dict:
+def apply_frozen(summaries: dict, folder: str, open_month: str | None,
+                 skip_tabs: set | None = None) -> dict:
     """Overwrite each summary's CLOSED month columns (those before `open_month`)
     with the frozen manual figures, then recompute the FY Total. The open month
-    and anything after it stay live. Mutates & returns `summaries`."""
+    and anything after it stay live. `skip_tabs` names verticals whose frozen
+    overlay is SKIPPED (their closed months are already authoritative in the
+    passed data — e.g. Re-Commerce driven by its manual detail) but which STILL
+    get the FY-residual recompute and the R/P re-split. Mutates & returns."""
     fc = frozen_columns(folder)
     open_dt = _mdt(open_month) if open_month else None
+    skip = skip_tabs or set()
 
     for tab, df in summaries.items():
         cells_by_month = fc.get(tab)
-        if not cells_by_month:
-            continue
-        for m, cells in cells_by_month.items():
-            if m not in df.columns:
-                continue
-            if open_dt is not None and pd.notna(_mdt(m)) and _mdt(m) >= open_dt:
-                continue                                   # keep the open month live
-            cloc = df.columns.get_loc(m)
-            for idx, val in cells.items():
-                if 0 <= idx < len(df):
-                    df.iat[idx, cloc] = _round_cell(idx, val)
-        _recompute_fy(df, open_month, tab)
-        _rederive_splits(df)
+        do_recompute = tab in skip
+        if cells_by_month and tab not in skip:
+            for m, cells in cells_by_month.items():
+                if m not in df.columns:
+                    continue
+                if open_dt is not None and pd.notna(_mdt(m)) and _mdt(m) >= open_dt:
+                    continue                               # keep the open month live
+                cloc = df.columns.get_loc(m)
+                for idx, val in cells.items():
+                    if 0 <= idx < len(df):
+                        df.iat[idx, cloc] = _round_cell(idx, val)
+            do_recompute = True
+        if do_recompute:
+            _recompute_fy(df, open_month, tab)
+            _rederive_splits(df)
     return summaries
 
 

@@ -1047,7 +1047,12 @@ def _style_workbook(raw: bytes, headers: list[tuple[str, int]],
                     continue   # merged group-header cells report no column index
                 v = cell.value
                 if isinstance(v, (_dt.date, _dt.datetime)):
+                    cell.number_format = "dd-mm-yyyy"   # DATE ONLY — strip the time
                     disp = v.strftime("%d-%b-%Y")
+                elif isinstance(v, str) and _re.match(r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}", v):
+                    v = v[:10]                          # 'YYYY-MM-DD 00:00:00' → 'YYYY-MM-DD'
+                    cell.value = v
+                    disp = v
                 elif _is_num(v) and cell.number_format not in ("General", None):
                     disp = f"{v:,.2f}" if "." in cell.number_format else f"{v:,.0f}"
                 else:

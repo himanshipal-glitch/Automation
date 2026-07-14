@@ -146,7 +146,7 @@ def _s(df: pd.DataFrame, col: str, default=0):
     return pd.Series(default, index=df.index, dtype=type(default))
 
 
-def _dt_str(series, fmt="%Y-%m-%d %H:%M:%S"):
+def _dt_str(series, fmt="%Y-%m-%d"):
     return pd.to_datetime(series, errors="coerce").dt.strftime(fmt).fillna("")
 
 

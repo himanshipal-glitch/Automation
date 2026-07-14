@@ -210,21 +210,29 @@ def _keeps_mp(cat: pd.Series) -> pd.Series:
 
 
 def apply_recommerce_manual(base_df: pd.DataFrame,
-                            manual_df: pd.DataFrame | None) -> pd.DataFrame:
-    """Swap Re-Commerce's live rows for the manually-costed detail through the
-    manual's cutoff date. Re-Commerce rows dated ≤ cutoff come from `manual_df`
-    (accurate cost, no Amazon×Recykal re-costing); rows after the cutoff stay
-    live (Amazon×Recykal). Every other vertical is untouched. Returns a new df.
-    Positional: 2 = Date (invoice), 85 = Broad Category."""
+                            manual_df: pd.DataFrame | None,
+                            known_ships: set | None = None) -> pd.DataFrame:
+    """Drive Re-Commerce from the stored manual detail, adding only the NEW
+    shipments from the live MIS. Re-Commerce rows come from `manual_df`
+    (accurate cost, no Amazon×Recykal re-costing); a live MIS Re-Commerce row is
+    added ONLY if its Shipment ID isn't already known — i.e. genuinely new — and
+    those get the live Amazon×Recykal cost. Every other vertical is untouched.
+
+    `known_ships` = the reference set of already-costed Shipment IDs. Pass the
+    WITH-Samsung manual's shipments for BOTH variants, so the without-Samsung
+    report doesn't re-add the deliberately-excluded Samsung shipments as 'new'.
+    If None, the manual's own shipments are used. Positional: 3 = Shipment ID,
+    85 = Broad Category."""
     if manual_df is None or getattr(manual_df, "empty", True):
         return base_df
-    m = manual_df.reindex(columns=base_df.columns).copy()   # align to engine schema
-    cutoff = pd.to_datetime(m.iloc[:, 2], errors="coerce").max()
+    m = manual_df.reindex(columns=base_df.columns).copy()      # align to engine schema
+    known = set(known_ships) if known_ships is not None else \
+        set(m.iloc[:, 3].astype(str).str.strip())
     cat = base_df.iloc[:, 85].astype(str)
     is_rc = cat.str.contains(r"re-commerce|recommerce", case=False, na=False)
-    dts = pd.to_datetime(base_df.iloc[:, 2], errors="coerce")
-    # keep every non-RC row; keep RC rows only AFTER the cutoff (live Amazon logic)
-    keep = ~is_rc | (is_rc & dts.notna() & (dts > cutoff))
+    ship = base_df.iloc[:, 3].astype(str).str.strip()
+    # keep every non-RC row; add RC rows only for shipments not already known (new)
+    keep = ~is_rc | (is_rc & ~ship.isin(known))
     return pd.concat([base_df[keep], m], ignore_index=True)
 
 

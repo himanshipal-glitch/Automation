@@ -72,6 +72,37 @@ def _ib_has_vendor_invoice(df: pd.DataFrame, ship: pd.Series) -> pd.Series:
     return has_inv.groupby(ship).transform("max").astype(bool)
 
 
+def _ib_warehouse_set() -> set:
+    """The persistent IB(Warehouse) shipment list (uppercased). Empty set if
+    the store doesn't exist — callers then fall back to the SH heuristic."""
+    try:
+        import database as _db
+        return {str(s).strip().upper() for s in _db.load_ib_warehouse_shipments()}
+    except Exception:
+        return set()
+
+
+def _ib_split_masks(mask: pd.Series, ship: pd.Series,
+                    df: pd.DataFrame | None = None) -> tuple[pd.Series, pd.Series]:
+    """(b2b, warehouse) row masks within Institutional Business.
+
+    PRIMARY rule — the persistent IB(Warehouse) shipment list is definitive:
+    warehouse = shipment IS in the list; Enterprise (B2B) = everything else.
+    FALLBACK (list not stored) — old heuristic: B2B = SH-prefixed except
+    'MPIB', requiring a vendor invoice (when `df` is given)."""
+    _sh = ship.astype(str).str.strip().str.upper()
+    wh_set = _ib_warehouse_set()
+    if wh_set:
+        wh  = mask & _sh.isin(wh_set)
+        b2b = mask & ~_sh.isin(wh_set)
+    else:
+        b2b = mask & _sh.str.startswith("SH") & ~_sh.str.contains("MPIB", na=False)
+        wh  = mask & (~_sh.str.startswith("SH") | _sh.str.contains("MPIB", na=False))
+        if df is not None:
+            b2b = b2b & _ib_has_vendor_invoice(df, ship)
+    return b2b, wh
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # COLUMN GUIDE — what each report column is, which SIDE it comes from, and its
 # GST treatment. Written as a sheet into every downloaded workbook.
@@ -321,12 +352,9 @@ def split_by_category(profit_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
             continue
         mask = cat.eq(c)
         if c.lower().replace(" ", "").startswith("institutional"):
-            # B2B = SH-prefixed EXCEPT internal 'MPIB' ones (warehouse/internal
-            # transfers); Warehouse = non-SH OR containing 'MPIB'.
-            _sh = ship.str.upper()
-            b2b = mask & _sh.str.startswith("SH") & ~_sh.str.contains("MPIB", na=False)
-            wh  = mask & (~_sh.str.startswith("SH") | _sh.str.contains("MPIB", na=False))
-            b2b = b2b & _ib_has_vendor_invoice(profit_df, ship)
+            # Warehouse = shipment in the persistent IB(Warehouse) list;
+            # Enterprise = every other IB shipment (fallback: SH heuristic).
+            b2b, wh = _ib_split_masks(mask, ship, profit_df)
             # always emit BOTH reports — even if one currently has 0 rows
             out["Enterprise"]       = profit_df[b2b].reset_index(drop=True)
             out["Processing Center"] = profit_df[wh].reset_index(drop=True)
@@ -453,12 +481,14 @@ def _summary_block(w: pd.DataFrame, recv: float, pay: float, wd: float = 30,
     #      their manuals carry ~0 actual DN, so netting would over-state margin.
     _cat  = w["Broad_Category"].astype(str)
     _ship = w["Shipment_ID"].astype(str).str.strip().str.upper()
+    _whs = _ib_warehouse_set()
+    _is_pc = _ship.isin(_whs) if _whs else ~_ship.str.startswith("SH")
     _no_net = (
         _cat.str.contains("re-commerce", case=False, na=False)
         | _cat.str.contains("recommerce", case=False, na=False)
         | _cat.str.contains("rewerse", case=False, na=False)
         | (_cat.str.strip().str.lower().str.startswith("institutional")
-           & ~_ship.str.startswith("SH"))            # Processing Center
+           & _is_pc)                                  # Processing Center
     )
     _elig = ~_no_net
     net_dn = float(w.loc[_elig, "Actual_DN"].sum()) + float(w.loc[_elig, "Provision_for_DN"].sum())
@@ -692,13 +722,17 @@ def _inv_tab_map(profit_df: pd.DataFrame) -> dict:
     inv  = profit_df.iloc[:, 39].astype(str).str.strip()
     cat  = profit_df.iloc[:, 85].astype(str).str.strip()
     ship = profit_df.iloc[:, 3].astype(str).str.strip().str.upper()
+    _whs = _ib_warehouse_set()
     m = {}
     for iv, c, sh in zip(inv, cat, ship):
         if not iv or iv.lower() == "nan":
             continue
         cl = c.lower().replace(" ", "")
         if cl.startswith("institutional"):
-            lab = "Enterprise" if (sh.startswith("SH") and "MPIB" not in sh) else "Processing Center"
+            if _whs:
+                lab = "Processing Center" if sh in _whs else "Enterprise"
+            else:
+                lab = "Enterprise" if (sh.startswith("SH") and "MPIB" not in sh) else "Processing Center"
         elif _re.sub(r"^\d+/", "", sh).startswith("MP") and "re-commerce" not in c.lower():
             lab = "Warehouse (MP)"
         else:
@@ -877,12 +911,9 @@ def summaries_by_category(profit_df: pd.DataFrame,
             continue
         mask = cat.eq(c)
         if c.lower().replace(" ", "").startswith("institutional"):
-            # B2B = SH-prefixed EXCEPT internal 'MPIB' ones (warehouse/internal
-            # transfers); Warehouse = non-SH OR containing 'MPIB'.
-            _sh = ship.str.upper()
-            b2b = mask & _sh.str.startswith("SH") & ~_sh.str.contains("MPIB", na=False)
-            wh  = mask & (~_sh.str.startswith("SH") | _sh.str.contains("MPIB", na=False))
-            b2b = b2b & _ib_has_vendor_invoice(main_df, ship)
+            # Warehouse = shipment in the persistent IB(Warehouse) list;
+            # Enterprise = every other IB shipment (fallback: SH heuristic).
+            b2b, wh = _ib_split_masks(mask, ship, main_df)
             # Enterprise receivable: only AR invoices that actually appear in the B2B
             # profitability (isolates B2B from warehouse, which share IB prefixes).
             _ib_recv = None
@@ -935,11 +966,8 @@ def top_materials(profit_df: pd.DataFrame, tab: str, n: int = 5):
     key = "".join(ch for ch in str(tab).lower() if ch.isalnum())
     if key in ("enterprise", "processingcenter"):
         inst = cat.str.strip().str.lower().str.startswith("institutional")
-        b2b = inst & ship.str.startswith("SH") & ~ship.str.contains("MPIB", na=False)
-        if key == "enterprise":
-            mask = b2b & _ib_has_vendor_invoice(w, w["Shipment_ID"].astype(str).str.strip())
-        else:
-            mask = inst & ~b2b
+        b2b, wh = _ib_split_masks(inst, ship, w)
+        mask = b2b if key == "enterprise" else wh
     elif key == "allcategories":
         mask = ~cat.str.strip().str.lower().str.startswith("fake dn")
     else:

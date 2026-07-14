@@ -224,6 +224,42 @@ def clear_no_dn_shipments() -> None:
             p.unlink()
 
 
+# ── IB (Warehouse) shipment list ──────────────────────────────────────────────
+# The definitive list of Institutional Business shipments that are WAREHOUSE
+# operations. Every IB shipment NOT in this list is Enterprise (B2B) — this
+# replaces the old 'SH prefix = B2B' heuristic.
+IB_WAREHOUSE_PATH = PERSIST_DIR / "ib_warehouse_shipments.parquet"
+
+
+def save_ib_warehouse_shipments(ships) -> int:
+    """Persist the warehouse shipment-id list (replaces — it's a full snapshot)."""
+    s = pd.Series(sorted(set(str(x).strip() for x in ships)), dtype=str)
+    s = s[(s != "") & (s.str.lower() != "nan")]
+    out = pd.DataFrame({"Shipment_ID": s.values})
+    try:
+        out.to_parquet(IB_WAREHOUSE_PATH, index=False)
+    except Exception:
+        out.to_pickle(IB_WAREHOUSE_PATH.with_suffix(".pkl"))
+    return len(out)
+
+
+def load_ib_warehouse_shipments() -> set:
+    df = pd.DataFrame()
+    if IB_WAREHOUSE_PATH.exists():
+        try: df = pd.read_parquet(IB_WAREHOUSE_PATH)
+        except Exception: df = pd.DataFrame()
+    elif IB_WAREHOUSE_PATH.with_suffix(".pkl").exists():
+        try: df = pd.read_pickle(IB_WAREHOUSE_PATH.with_suffix(".pkl"))
+        except Exception: df = pd.DataFrame()
+    if df.empty:
+        return set()
+    return set(df.iloc[:, 0].astype(str).str.strip())
+
+
+def ib_warehouse_count() -> int:
+    return len(load_ib_warehouse_shipments())
+
+
 # ── Accumulated profitability-details store (permanent) ──────────────────────
 # Zoho's MIS export is ROLLING — each one only carries recent invoices, so a
 # month's line rows vanish from later exports. This store accumulates every

@@ -626,6 +626,17 @@ def build_profitability(merged_df: pd.DataFrame,
         _empty_note = out["Resale Note"].astype(str).str.strip().isin(["", "nan", "None"])
         out.loc[_chg & _empty_note, "Resale Note"] = "Non-material charge (e.g. Finance Up-Charge / Hydra) — no CN/DN provision applied"
 
+    # ── Chronological order ───────────────────────────────────────────────────
+    # Orphan bills (appended after the invoice rows by the cleaning stage) carry
+    # their Bill Date in "Date" — a stable date sort interleaves them into the
+    # details instead of leaving them stacked at the bottom. Same-date rows keep
+    # their original order; undated rows stay at the end.
+    if "Date" in out.columns:
+        _d = pd.to_datetime(out["Date"], errors="coerce", format="mixed", dayfirst=True)
+        _order = pd.concat([_d[_d.notna()].sort_values(kind="stable"),
+                            _d[_d.isna()]]).index
+        out = out.loc[_order].reset_index(drop=True)
+
     # ── Fake-DN shipments ─────────────────────────────────────────────────────
     # Keep them in their invoice month, but move them out of the vertical totals
     # into the "Fake DN (Excluded)" bucket, flag the reason, and push to the bottom.

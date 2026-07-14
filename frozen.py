@@ -434,20 +434,52 @@ def _recompute_fy(df: pd.DataFrame, open_month: str | None, tab: str = "") -> No
     def S(idx):
         return sum(g(idx, m) for m in use)
 
-    # ── Qty / Sales / Purchases: FY comes from the DETAIL (the pre-freeze FY
-    # cell = _summary_block over the whole Profitability Report detail). The
-    # open month is then DERIVED = detail-FY − Σ(prior displayed months). This
-    # makes the open month the residual that ties the summary to the detail
-    # sheet, rather than the (imperfect) live-pipeline slice for that month.
-    # Rows: 0 Qty, 1 Sales, 2 Purchases.  Everything else is untouched.
+    # ── Open month (July) — Qty/Sales/Purchases DERIVED from the detail ────────
+    # FY comes from the DETAIL (pre-freeze FY cell = _summary_block over the whole
+    # Profitability Report detail). The open month is then the residual:
+    #     open = detail-FY − Σ(prior displayed months).
+    # And CRUCIALLY every open-month figure that USES Sales/Purchases/Qty is
+    # re-derived from those residuals (not the live-pipeline July slice), so the
+    # whole July column is internally consistent with its subtracted Sales/Purch.
+    # Kept live (independent of the sales/purchase residual): Operational Cost,
+    # absolute transport, CN/DN values, Receivable, Payable, and the counts.
     if open_month in months:
         _oc = df.columns.get_loc(open_month)
         _priors = [m for m in use if m != open_month]
-        for _idx, _rnd in ((0, 2), (1, 0), (2, 0)):
-            _detail_fy = float(pd.to_numeric(pd.Series([df.iat[_idx, fyloc]]),
-                                             errors="coerce").fillna(0).iloc[0])
-            _prior_sum = sum(g(_idx, m) for m in _priors)
-            df.iat[_idx, _oc] = round(_detail_fy - _prior_sum, _rnd)
+
+        # live open-month values captured BEFORE overwriting (needed to re-derive)
+        _S0, _P0 = g(1, open_month), g(2, open_month)          # live Sales / Purchases
+        _gm0, _nm0, _ocst = g(3, open_month), g(6, open_month), g(5, open_month)
+        _dso0, _dpo0 = g(18, open_month), g(22, open_month)
+        _cnv, _dnv = g(24, open_month), g(26, open_month)      # CN / DN value (kept live)
+        _tc_abs = _gm0 - _nm0 - _ocst                          # absolute transport (kept live)
+
+        def _fyv(i):
+            return float(pd.to_numeric(pd.Series([df.iat[i, fyloc]]),
+                                       errors="coerce").fillna(0).iloc[0])
+        _Qr = round(_fyv(0) - sum(g(0, m) for m in _priors), 2)
+        _Sr = round(_fyv(1) - sum(g(1, m) for m in _priors), 0)
+        _Pr = round(_fyv(2) - sum(g(2, m) for m in _priors), 0)
+        df.iat[0, _oc], df.iat[1, _oc], df.iat[2, _oc] = _Qr, _Sr, _Pr
+
+        _qkg = _Qr * (1 if tab in UNIT_TABS else 1000)
+        _gm_r = _Sr - _Pr
+        _nm_r = _gm_r - _tc_abs - _ocst
+        df.iat[3, _oc]  = round(_gm_r, 0)                        # Gross Margin
+        df.iat[6, _oc]  = round(_nm_r, 0)                        # Net Margin
+        df.iat[4, _oc]  = round(100 * _gm_r / _Sr, 2) if _Sr else 0.0   # GM %
+        df.iat[7, _oc]  = round(100 * _nm_r / _Sr, 2) if _Sr else 0.0   # NM %
+        df.iat[8, _oc]  = round(_Sr / _qkg, 2) if _qkg else 0.0         # Revenue / Kg
+        df.iat[9, _oc]  = round(_Pr / _qkg, 2) if _qkg else 0.0         # Purchase Cost / Kg
+        df.iat[10, _oc] = round(_tc_abs / _qkg, 2) if _qkg else 0.0     # Transport / Kg
+        df.iat[25, _oc] = round(100 * _cnv / _Sr, 2) if _Sr else 0.0    # CN % to Revenue
+        df.iat[27, _oc] = round(100 * _dnv / _Pr, 2) if _Pr else 0.0    # DN % to Purchase
+        # DSO/DPO scale inversely with Sales/Purchases (Receivable, Payable, days
+        # are unchanged), so DSO_resid = DSO_live × Sales_live / Sales_resid.
+        _dso_r = round(_dso0 * _S0 / _Sr, 0) if (_Sr and _S0) else _dso0
+        _dpo_r = round(_dpo0 * _P0 / _Pr, 0) if (_Pr and _P0) else _dpo0
+        df.iat[18, _oc], df.iat[22, _oc] = _dso_r, _dpo_r
+        df.iat[23, _oc] = round(_dso_r - _dpo_r, 0)             # Working Capital Days
 
     qty, sales, pur = S(0), S(1), S(2)
     gm, oc, nm = S(3), S(5), S(6)

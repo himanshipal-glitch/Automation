@@ -146,7 +146,7 @@ COLUMN_GUIDE = [
     ("Net Revenue",            "Computed",                 "Excl. GST", "Sales − actual CN − CN provision − full reversals"),
     ("Margin",                 "Computed",                 "Excl. GST", "Net Revenue − Total Cost (row margin, without GST)"),
     ("Reamrks - Margin",       "Computed",                 "—", "Margin remark"),
-    ("Remarks",                "Manual note",              "—", "Free remark (blank in engine)"),
+    ("Remarks",                "Computed",                 "—", "Per-shipment: Finance Up Charge / Divertion / Full Rejection / DN & CN Issued / DN & CN Provision / No Debit Note"),
     ("LMI @ Inception",        "Computed",                 "Excl. GST", "Margin at inception (before notes)"),
     ("Remarks @ Inception",    "Computed",                 "—", "Inception remark"),
     ("Margin (%)",             "Computed",                 "—", "Margin ÷ Net Revenue"),

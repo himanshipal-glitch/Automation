@@ -451,6 +451,29 @@ def build_profitability(merged_df: pd.DataFrame,
     # CR      Margin      = SUM(CN:CQ)
     Margin_gst = Sales_gst + Purch_gst + CN_gst + DN_gst
 
+    # ── Remarks — verified, deterministic per-shipment classification ─────────
+    # First matching rule wins (priority top→bottom):
+    #   Finance Up Charge  : non-material charge line (blank Shipment ID)
+    #   Divertion          : resell case (a resold shipment)
+    #   Full Rejection     : shipment fully reversed (Actual CN ≥ 95% of sale)
+    #   DN & CN Issued     : shipment has BOTH an actual DN and an actual CN
+    #   DN & CN Provision  : shipment has BOTH a DN provision and a CN provision
+    #   No Debit Note      : shipment has no actual DN
+    #   (blank)            : none of the above (e.g. DN present but no CN/provision)
+    def _ship_sum(S):
+        return pd.to_numeric(S, errors="coerce").fillna(0).abs().groupby(_ship_key).transform("sum")
+    _adn = _ship_sum(BZ) > 1          # actual DN present on the shipment
+    _acn = _ship_sum(BY) > 1          # actual CN present
+    _pdn = _ship_sum(AL) > 1          # DN provision taken
+    _pcn = _ship_sum(BM) > 1          # CN provision taken
+    _blank_ship = _ship_key.str.lower().isin(["", "nan", "none", "nat"])
+    _resell = _resale_note.astype(str).str.strip().ne("")
+    _remarks = pd.Series(np.select(
+        [_blank_ship, _resell, _full_rev, _adn & _acn, _pdn & _pcn, ~_adn],
+        ["Finance Up Charge", "Divertion", "Full Rejection",
+         "DN & CN Issued", "DN & CN Provision", "No Debit Note"],
+        default=""), index=d.index)
+
     # ── Build output with EXACT column names in report order ──────────────────
     # Duplicate column names handled via list of (name, series) pairs
     cols = [
@@ -536,7 +559,7 @@ def build_profitability(merged_df: pd.DataFrame,
         ("Net Revenue",              BN),
         ("Margin",                   BO),
         ("Reamrks - Margin",         pd.Series(BP, index=d.index)),
-        ("Remarks",                  pd.Series("", index=d.index)),
+        ("Remarks",                  _remarks),
         ("LMI @ Inception",          BR),
         ("Remarks @ Inception",      pd.Series(BS, index=d.index)),
         ("Margin (%)",               pd.Series(BT, index=d.index)),

@@ -1288,24 +1288,13 @@ elif page == "Summary Report":
             st.stop()
         reco_ships = st.session_state.get("reco_selected", set()) if len(_cand) else set()
 
-        # ── Re-Commerce manual detail — SINGLE report, ALL shipments ────────
-        # If a manual Re-Commerce detail is stored, Re-Commerce is driven by it
-        # (≤ cutoff) + live Amazon logic (> cutoff). No Samsung / non-Samsung
-        # split any more: one report containing every shipment (Samsung incl.).
-        # The WITH-Samsung manual is the complete list, so prefer it as source.
-        _reco_w = db.load_recommerce_manual(True)
-        _reco_wo = db.load_recommerce_manual(False)
-        _ref = _reco_w if not _reco_w.empty else _reco_wo
-        _variants: dict[str, pd.DataFrame] = {}
-        if not _ref.empty:
-            # "Already-costed" set = the manual's shipments; only genuinely-new
-            # MIS shipments are appended on top (Samsung ones included).
-            _known_reco = set(_ref.iloc[:, 3].astype(str).str.strip())
-            _variants["Report"] = reports.apply_recommerce_manual(
-                profit_df, _ref, _known_reco, exclude_samsung_new=False)
-        else:
-            _variants["Report"] = profit_df
-        _reco_skip = {"Re-Commerce"} if not _ref.empty else set()
+        # ── Re-Commerce = a normal vertical (Samsung rule removed) ──────────
+        # Closed months come from the newest 'Profitability Report of Recommerce
+        # till DD-MM-YYYY.xlsx' via the frozen overlay (same as every other
+        # vertical); the open month is computed live from the MIS. The manual
+        # detail store no longer overrides the summary.
+        _variants: dict[str, pd.DataFrame] = {"Report": profit_df}
+        _reco_skip: set = set()
 
         def _build(_pdf):
             _s = reports.summaries_by_category(_pdf, _ar, _ap, op_cost_bills=_obills,

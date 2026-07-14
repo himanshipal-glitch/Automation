@@ -209,6 +209,20 @@ def _keeps_mp(cat: pd.Series) -> pd.Series:
     return cat.str.contains(_MP_KEEP_RE, case=False, na=False)
 
 
+def _itad_reco_mask(df: pd.DataFrame) -> pd.Series:
+    """ITAD rows whose shipment has a MISSING BILL (no cost source) — a purchase
+    bill was never matched. These are pulled out of every calculation and listed
+    on their own 'Reco Items' sheet for follow-up. Positional: cat=85."""
+    cat = df.iloc[:, 85].astype(str)
+    is_itad = cat.str.contains(r"it ?ad|it assets", case=False, na=False)
+    cs_col = next((c for c in df.columns if str(c).strip().lower() == "cost source"), None)
+    if cs_col is None:
+        return is_itad & False
+    cs = df[cs_col].astype(str).str.strip().str.lower()
+    no_bill = cs.isin(["", "nan", "none", "no cost found"])
+    return is_itad & no_bill
+
+
 def split_by_category(profit_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     """
     Split the full profitability report into one report per Broad Category.
@@ -544,6 +558,40 @@ def summary_report(profit_df: pd.DataFrame,
                         + [_f27p_fy, _oldp_fy]
                         + _fyb[18:])
 
+    # Force the open month (last_month) QTY, SALES, and PURCHASES to be the balancing
+    # figure between the FY Total and the historical (frozen) months.
+    if last_month and last_month in data and len(months) > 1:
+        prev_months = [m for m in months if m != last_month]
+        
+        sum_qty = sum(data[m][0] for m in prev_months)
+        sum_sales = sum(data[m][1] for m in prev_months)
+        sum_pur = sum(data[m][2] for m in prev_months)
+        
+        new_last_qty = round(data["FY Total"][0] - sum_qty, 2)
+        new_last_sales = round(data["FY Total"][1] - sum_sales, 0)
+        new_last_pur = round(data["FY Total"][2] - sum_pur, 0)
+        
+        old_gm = data[last_month][3]
+        old_nm = data[last_month][6]
+        oc = data[last_month][5]
+        tc = old_gm - old_nm - oc  # reverse-engineer transport cost
+        
+        data[last_month][0] = new_last_qty
+        data[last_month][1] = new_last_sales
+        data[last_month][2] = new_last_pur
+        
+        # Re-derive dependent metrics for internal consistency
+        gm = new_last_sales - new_last_pur
+        nm = gm - tc - oc
+        data[last_month][3] = round(gm, 0)
+        data[last_month][4] = round((gm / new_last_sales * 100), 2) if new_last_sales else 0.0
+        data[last_month][6] = round(nm, 0)
+        data[last_month][7] = round((nm / new_last_sales * 100), 2) if new_last_sales else 0.0
+        
+        data[last_month][8] = round(new_last_sales / new_last_qty, 2) if new_last_qty else 0.0
+        data[last_month][9] = round(new_last_pur / new_last_qty, 2) if new_last_qty else 0.0
+        data[last_month][10] = round(tc / new_last_qty, 2) if new_last_qty else 0.0
+
     return pd.DataFrame(data)
 
 
@@ -657,7 +705,9 @@ def summaries_by_category(profit_df: pd.DataFrame,
     # Metal (End Generator) and Plastic. Those keep their MP rows.
     is_mp = _is_mp_ship(ship_all)
     keep_mp = _keeps_mp(cat_all)
-    exclude = is_mp & ~keep_mp
+    # ITAD missing-bill rows are removed from ALL calculations (shown separately
+    # on the 'Reco Items' sheet in the workbook).
+    exclude = (is_mp & ~keep_mp) | _itad_reco_mask(profit_df)
     main_df = profit_df[~exclude]
     mp_df   = profit_df[exclude]
 
@@ -1206,6 +1256,16 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
         else:
             _rep = _live_src.copy()
             _rep["Row Source"] = "Live (MIS)"
+
+        # ITAD missing-bill rows → pulled out of the Profitability Report onto
+        # their own 'Reco Items' sheet (they're also excluded from the summary).
+        if len(_rep):
+            _reco_mask = _itad_reco_mask(_rep)
+            _reco = _rep[_reco_mask]
+            _rep = _rep[~_reco_mask]
+            if len(_reco):
+                _reco.to_excel(w, sheet_name="Reco Items", index=False)
+                _headers.append(("Reco Items", 1))
 
         # Move orphan shipments (Service Charges, etc. with blank Shipment ID) to the bottom
         if "Shipment ID" in _rep.columns:

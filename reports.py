@@ -253,7 +253,10 @@ def _itad_reco_mask(df: pd.DataFrame) -> pd.Series:
     bill was never matched. Covers ALL verticals (not just ITAD). These are
     candidates for the manual Reco-Items review; only user-ticked shipments
     are excluded from calculations and listed on the 'Reco Items' sheet."""
-    cs_col = next((c for c in df.columns if str(c).strip().lower() == "cost source"), None)
+    # normalized lookup — the session store sanitizes names ("Cost Source" →
+    # "Cost_Source"), so match on alphanumerics only
+    cs_col = next((c for c in df.columns
+                   if "".join(ch for ch in str(c).lower() if ch.isalnum()) == "costsource"), None)
     if cs_col is None:
         return pd.Series(False, index=df.index)
     cs = df[cs_col].astype(str).str.strip().str.lower()

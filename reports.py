@@ -249,29 +249,28 @@ def apply_recommerce_manual(base_df: pd.DataFrame,
 
 
 def _itad_reco_mask(df: pd.DataFrame) -> pd.Series:
-    """ITAD rows whose shipment has a MISSING BILL (no cost source) — a purchase
-    bill was never matched. These are pulled out of every calculation and listed
-    on their own 'Reco Items' sheet for follow-up. Positional: cat=85."""
-    cat = df.iloc[:, 85].astype(str)
-    is_itad = cat.str.contains(r"it ?ad|it assets", case=False, na=False)
+    """Rows whose shipment has a MISSING BILL (no cost source) — a purchase
+    bill was never matched. Covers ALL verticals (not just ITAD). These are
+    candidates for the manual Reco-Items review; only user-ticked shipments
+    are excluded from calculations and listed on the 'Reco Items' sheet."""
     cs_col = next((c for c in df.columns if str(c).strip().lower() == "cost source"), None)
     if cs_col is None:
-        return is_itad & False
+        return pd.Series(False, index=df.index)
     cs = df[cs_col].astype(str).str.strip().str.lower()
-    no_bill = cs.isin(["", "nan", "none", "no cost found"])
-    return is_itad & no_bill
+    return cs.isin(["", "nan", "none", "no cost found"])
 
 
 def reco_candidates(profit_df: pd.DataFrame) -> pd.DataFrame:
-    """Per-shipment list of ITAD missing-bill candidates for the manual Reco-Items
-    review on the Summary page. Positional: 2=Date, 3=Shipment ID, 12=Material,
-    41=Buyer Name, 48=Amount."""
+    """Per-shipment list of missing-bill candidates (ALL verticals) for the manual
+    Reco-Items review on the Summary page. Positional: 2=Date, 3=Shipment ID,
+    12=Material, 41=Buyer Name, 48=Amount, 85=Broad Category (Vertical)."""
     mask = _itad_reco_mask(profit_df)
-    cols = ["Shipment ID", "Date", "Buyer Name", "Material", "Amount"]
+    cols = ["Vertical", "Shipment ID", "Date", "Buyer Name", "Material", "Amount"]
     if not mask.any():
         return pd.DataFrame(columns=cols)
     sub = profit_df[mask]
     g = pd.DataFrame({
+        "Vertical": sub.iloc[:, 85].astype(str).str.strip(),
         "Shipment ID": sub.iloc[:, 3].astype(str).str.strip(),
         "Date": pd.to_datetime(sub.iloc[:, 2], errors="coerce").dt.strftime("%Y-%m-%d").fillna(""),
         "Buyer Name": sub.iloc[:, 41].astype(str),
@@ -279,7 +278,7 @@ def reco_candidates(profit_df: pd.DataFrame) -> pd.DataFrame:
         "Amount": pd.to_numeric(sub.iloc[:, 48], errors="coerce").fillna(0.0),
     })
     return (g.groupby("Shipment ID", as_index=False)
-             .agg({"Date": "first", "Buyer Name": "first",
+             .agg({"Vertical": "first", "Date": "first", "Buyer Name": "first",
                    "Material": lambda x: ", ".join(sorted(set(x))), "Amount": "sum"}))[cols]
 
 

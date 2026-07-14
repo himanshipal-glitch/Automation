@@ -107,7 +107,7 @@ with st.sidebar:
     st.markdown("---")
     # build tag — bump when pushing significant changes; confirms which version
     # a deployed instance is running (hosted apps can lag behind the repo)
-    st.caption("build: **v2.6 — ITAD Reco Items manual review + save gate**")
+    st.caption("build: **v2.7 — Reco Items manual review for ALL verticals, always visible**")
     status = db.all_db_status()
     loaded = [s for s, v in status.items() if v["exists"]]
     st.caption(f"{len(loaded)} / {len(status)} sheets loaded")
@@ -1246,33 +1246,43 @@ elif page == "Summary Report":
         _pdates = pd.to_datetime(profit_df.iloc[:, 2], errors="coerce")
         _open_m = _pdates.max().strftime("%b-%y") if _pdates.notna().any() else None
 
-        # ── ITAD Reco Items — manual review (gate the summary until saved) ──────
-        # ITAD shipments with a missing bill are candidates for exclusion. The user
-        # ticks the ones to KEEP in Reco Items (excluded from calcs); unticked ones
-        # flow into the Details & summary. The summary only computes AFTER Save.
+        # ── Reco Items — manual review, ALL verticals (gate the summary until saved) ──
+        # Shipments (any vertical) with a missing bill are candidates for exclusion.
+        # The user ticks the ones to KEEP in Reco Items (excluded from calcs);
+        # unticked ones flow into the Details & summary. The box is always shown.
         _cand = reports.reco_candidates(profit_df)
         _sig = tuple(sorted(_cand["Shipment ID"].tolist())) if len(_cand) else ()
 
-        def _render_reco_review():
-            st.markdown("### 🧾 ITAD Reco Items — manual review")
+        def _render_reco_review(suffix=""):
+            st.markdown("### 🧾 Reco Items — manual review (all verticals)")
+            if not len(_cand):
+                st.info("No missing-bill shipments detected in the current data — "
+                        "every shipment has a matched cost source. Nothing to review.")
+                return
             st.caption("Tick a shipment to **keep it in Reco Items** (excluded from the "
                        "Details & summary). Unticked shipments are **included** in the "
                        "calculations. Click **Save** to (re)compute the summary.")
+            _verts = sorted(_cand["Vertical"].unique())
+            _pick = st.multiselect("Filter by vertical", _verts, default=_verts,
+                                   key=f"reco_vert_filter{suffix}")
             _prev = st.session_state.get("reco_selected", set())
-            _ed = _cand.copy()
+            _ed = _cand[_cand["Vertical"].isin(_pick)].copy()
             _ed["Reco? (exclude)"] = _ed["Shipment ID"].isin(_prev)
             _res = st.data_editor(
-                _ed, hide_index=True, use_container_width=True, key="reco_editor",
-                disabled=["Shipment ID", "Date", "Buyer Name", "Material", "Amount"])
-            if st.button("💾 Save & compute summary", key="reco_save"):
-                st.session_state["reco_selected"] = set(
-                    _res.loc[_res["Reco? (exclude)"], "Shipment ID"].astype(str))
+                _ed, hide_index=True, use_container_width=True, key=f"reco_editor{suffix}",
+                disabled=["Vertical", "Shipment ID", "Date", "Buyer Name", "Material", "Amount"])
+            if st.button("💾 Save & compute summary", key=f"reco_save{suffix}"):
+                # Keep prior ticks for shipments hidden by the vertical filter;
+                # update only the rows shown in the editor.
+                _shown = set(_res["Shipment ID"].astype(str))
+                _picked = set(_res.loc[_res["Reco? (exclude)"], "Shipment ID"].astype(str))
+                st.session_state["reco_selected"] = (_prev - _shown) | _picked
                 st.session_state["reco_sig"] = _sig
                 st.rerun()
 
         _reco_ready = (len(_cand) == 0) or (st.session_state.get("reco_sig") == _sig)
         if not _reco_ready:
-            st.warning(f"{len(_cand)} ITAD shipment(s) have a missing bill — review below, "
+            st.warning(f"{len(_cand)} shipment(s) have a missing bill — review below, "
                        "then **Save** to compute the summary.")
             _render_reco_review()
             st.stop()
@@ -1351,13 +1361,13 @@ elif page == "Summary Report":
                         key=f"dl_comb_{name}",
                     )
 
-        # ── Reco Items review table (under the summary) — adjust & re-Save ──────
+        # ── Reco Items review box (under the summary) — always shown ────────────
+        st.markdown("---")
         if len(_cand):
-            st.markdown("---")
             _in_reco = len(reco_ships)
             st.caption(f"🧾 {_in_reco} of {len(_cand)} candidate shipment(s) currently in "
                        f"Reco Items (excluded); the rest are included in the calculations.")
-            _render_reco_review()
+        _render_reco_review(suffix="_bottom")
 
         st.markdown("---")
         # One "Download ALL" per variant (two when with/without Samsung exist)

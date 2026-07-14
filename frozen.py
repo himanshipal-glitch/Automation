@@ -434,6 +434,21 @@ def _recompute_fy(df: pd.DataFrame, open_month: str | None, tab: str = "") -> No
     def S(idx):
         return sum(g(idx, m) for m in use)
 
+    # ── Qty / Sales / Purchases: FY comes from the DETAIL (the pre-freeze FY
+    # cell = _summary_block over the whole Profitability Report detail). The
+    # open month is then DERIVED = detail-FY − Σ(prior displayed months). This
+    # makes the open month the residual that ties the summary to the detail
+    # sheet, rather than the (imperfect) live-pipeline slice for that month.
+    # Rows: 0 Qty, 1 Sales, 2 Purchases.  Everything else is untouched.
+    if open_month in months:
+        _oc = df.columns.get_loc(open_month)
+        _priors = [m for m in use if m != open_month]
+        for _idx, _rnd in ((0, 2), (1, 0), (2, 0)):
+            _detail_fy = float(pd.to_numeric(pd.Series([df.iat[_idx, fyloc]]),
+                                             errors="coerce").fillna(0).iloc[0])
+            _prior_sum = sum(g(_idx, m) for m in _priors)
+            df.iat[_idx, _oc] = round(_detail_fy - _prior_sum, _rnd)
+
     qty, sales, pur = S(0), S(1), S(2)
     gm, oc, nm = S(3), S(5), S(6)
     cnv, dnv = S(24), S(26)

@@ -107,7 +107,7 @@ with st.sidebar:
     st.markdown("---")
     # build tag — bump when pushing significant changes; confirms which version
     # a deployed instance is running (hosted apps can lag behind the repo)
-    st.caption("build: **v2.7.1 — fix: Reco detection survives session column sanitization (Cost_Source)**")
+    st.caption("build: **v2.8 — Re-Commerce: single report with ALL shipments (Samsung split removed)**")
     status = db.all_db_status()
     loaded = [s for s, v in status.items() if v["exists"]]
     st.caption(f"{len(loaded)} / {len(status)} sheets loaded")
@@ -1288,32 +1288,24 @@ elif page == "Summary Report":
             st.stop()
         reco_ships = st.session_state.get("reco_selected", set()) if len(_cand) else set()
 
-        # ── Re-Commerce WITH / WITHOUT Samsung variants ─────────────────────
-        # If manual Re-Commerce detail(s) are stored, Re-Commerce is driven by
-        # them (≤ cutoff) + live Amazon logic (> cutoff), and we produce a
-        # SEPARATE full report for each variant. Otherwise one report as before.
+        # ── Re-Commerce manual detail — SINGLE report, ALL shipments ────────
+        # If a manual Re-Commerce detail is stored, Re-Commerce is driven by it
+        # (≤ cutoff) + live Amazon logic (> cutoff). No Samsung / non-Samsung
+        # split any more: one report containing every shipment (Samsung incl.).
+        # The WITH-Samsung manual is the complete list, so prefer it as source.
         _reco_w = db.load_recommerce_manual(True)
         _reco_wo = db.load_recommerce_manual(False)
-        # "Already-costed" shipment set = the WITH-Samsung manual (the complete list,
-        # incl. Samsung). Used for BOTH variants so only genuinely-new MIS shipments
-        # are added, and the without-Samsung report never re-adds Samsung shipments.
-        _known_reco = None
         _ref = _reco_w if not _reco_w.empty else _reco_wo
-        if not _ref.empty:
-            _known_reco = set(_ref.iloc[:, 3].astype(str).str.strip())
         _variants: dict[str, pd.DataFrame] = {}
-        # New (post-manual) shipments are routed by Samsung membership: the
-        # WITH-Samsung report gets ALL new shipments; the WITHOUT report gets only
-        # the NON-Samsung new ones (Samsung detected by name — see _is_samsung).
-        if not _reco_w.empty:
-            _variants["With Samsung"] = reports.apply_recommerce_manual(
-                profit_df, _reco_w, _known_reco, exclude_samsung_new=False)
-        if not _reco_wo.empty:
-            _variants["Without Samsung"] = reports.apply_recommerce_manual(
-                profit_df, _reco_wo, _known_reco, exclude_samsung_new=True)
-        if not _variants:
+        if not _ref.empty:
+            # "Already-costed" set = the manual's shipments; only genuinely-new
+            # MIS shipments are appended on top (Samsung ones included).
+            _known_reco = set(_ref.iloc[:, 3].astype(str).str.strip())
+            _variants["Report"] = reports.apply_recommerce_manual(
+                profit_df, _ref, _known_reco, exclude_samsung_new=False)
+        else:
             _variants["Report"] = profit_df
-        _reco_skip = {"Re-Commerce"} if (not _reco_w.empty or not _reco_wo.empty) else set()
+        _reco_skip = {"Re-Commerce"} if not _ref.empty else set()
 
         def _build(_pdf):
             _s = reports.summaries_by_category(_pdf, _ar, _ap, op_cost_bills=_obills,
@@ -1370,7 +1362,7 @@ elif page == "Summary Report":
         _render_reco_review(suffix="_bottom")
 
         st.markdown("---")
-        # One "Download ALL" per variant (two when with/without Samsung exist)
+        # One "Download ALL" for the single report (all shipments incl. Samsung)
         for _lbl, _pdf in _variants.items():
             _s = summaries if _lbl == _sel else _build(_pdf)
             _sfx = "" if _lbl == "Report" else f" — {_lbl}"
@@ -1423,8 +1415,8 @@ elif page == "Summary Report":
                                         regards="Regards,<br>Profitability Automation Engine")
 
         def _send_all(only_to=None):
-            """Send the report — once per Re-Commerce variant (with/without Samsung),
-            and per vertical if that box is ticked."""
+            """Send the single all-shipments report — per vertical if that box
+            is ticked."""
             _rbv = _cfg.get("recipients_by_vertical", {})
             _base_to = [x.strip() for x in _to.split(",") if x.strip()]
             results = []

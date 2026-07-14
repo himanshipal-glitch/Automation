@@ -262,6 +262,36 @@ def _itad_reco_mask(df: pd.DataFrame) -> pd.Series:
     return is_itad & no_bill
 
 
+def reco_candidates(profit_df: pd.DataFrame) -> pd.DataFrame:
+    """Per-shipment list of ITAD missing-bill candidates for the manual Reco-Items
+    review on the Summary page. Positional: 2=Date, 3=Shipment ID, 12=Material,
+    41=Buyer Name, 48=Amount."""
+    mask = _itad_reco_mask(profit_df)
+    cols = ["Shipment ID", "Date", "Buyer Name", "Material", "Amount"]
+    if not mask.any():
+        return pd.DataFrame(columns=cols)
+    sub = profit_df[mask]
+    g = pd.DataFrame({
+        "Shipment ID": sub.iloc[:, 3].astype(str).str.strip(),
+        "Date": pd.to_datetime(sub.iloc[:, 2], errors="coerce").dt.strftime("%Y-%m-%d").fillna(""),
+        "Buyer Name": sub.iloc[:, 41].astype(str),
+        "Material": sub.iloc[:, 12].astype(str),
+        "Amount": pd.to_numeric(sub.iloc[:, 48], errors="coerce").fillna(0.0),
+    })
+    return (g.groupby("Shipment ID", as_index=False)
+             .agg({"Date": "first", "Buyer Name": "first",
+                   "Material": lambda x: ", ".join(sorted(set(x))), "Amount": "sum"}))[cols]
+
+
+def _reco_exclusion_mask(df: pd.DataFrame, reco_ships: set | None) -> pd.Series:
+    """Which rows are excluded as Reco Items. If `reco_ships` is given (the user's
+    saved manual selection), exclude exactly those shipments; otherwise fall back
+    to the automatic ITAD-missing-bill detection."""
+    if reco_ships is None:
+        return _itad_reco_mask(df)
+    return df.iloc[:, 3].astype(str).str.strip().isin(set(reco_ships))
+
+
 def split_by_category(profit_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     """
     Split the full profitability report into one report per Broad Category.
@@ -727,7 +757,8 @@ def _afr_op_cost(bills_df) -> dict:
 def summaries_by_category(profit_df: pd.DataFrame,
                           ar_df: pd.DataFrame | None = None,
                           ap_df: pd.DataFrame | None = None,
-                          op_cost_bills: pd.DataFrame | None = None) -> dict[str, pd.DataFrame]:
+                          op_cost_bills: pd.DataFrame | None = None,
+                          reco_ships: set | None = None) -> dict[str, pd.DataFrame]:
     """
     One summary report per Broad Category — with Institutional Business
     split into Enterprise (Shipment ID starts 'SHID') and Processing Center.
@@ -746,7 +777,7 @@ def summaries_by_category(profit_df: pd.DataFrame,
     keep_mp = _keeps_mp(cat_all)
     # ITAD missing-bill rows are removed from ALL calculations (shown separately
     # on the 'Reco Items' sheet in the workbook).
-    exclude = (is_mp & ~keep_mp) | _itad_reco_mask(profit_df)
+    exclude = (is_mp & ~keep_mp) | _reco_exclusion_mask(profit_df, reco_ships)
     main_df = profit_df[~exclude]
     mp_df   = profit_df[exclude]
 
@@ -1091,7 +1122,8 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
                       profit_df: pd.DataFrame,
                       ar_df: pd.DataFrame | None = None,
                       ap_df: pd.DataFrame | None = None,
-                      vertical: str | None = None) -> bytes:
+                      vertical: str | None = None,
+                      reco_ships: set | None = None) -> bytes:
     """One Excel with four stacked sheets — Summary, Receivables, Payables,
     Profitability Report. If `vertical` is given, everything is filtered to it;
     otherwise all verticals are included (stacked by type)."""
@@ -1304,7 +1336,7 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
         # ITAD missing-bill rows → pulled out of the Profitability Report onto
         # their own 'Reco Items' sheet (they're also excluded from the summary).
         if len(_rep):
-            _reco_mask = _itad_reco_mask(_rep)
+            _reco_mask = _reco_exclusion_mask(_rep, reco_ships)
             _reco = _rep[_reco_mask]
             _rep = _rep[~_reco_mask]
             if len(_reco):

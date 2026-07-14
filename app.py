@@ -107,7 +107,7 @@ with st.sidebar:
     st.markdown("---")
     # build tag — bump when pushing significant changes; confirms which version
     # a deployed instance is running (hosted apps can lag behind the repo)
-    st.caption("build: **v2.5 — new Samsung shipments route to Samsung report only**")
+    st.caption("build: **v2.6 — ITAD Reco Items manual review + save gate**")
     status = db.all_db_status()
     loaded = [s for s, v in status.items() if v["exists"]]
     st.caption(f"{len(loaded)} / {len(status)} sheets loaded")
@@ -1246,6 +1246,38 @@ elif page == "Summary Report":
         _pdates = pd.to_datetime(profit_df.iloc[:, 2], errors="coerce")
         _open_m = _pdates.max().strftime("%b-%y") if _pdates.notna().any() else None
 
+        # ── ITAD Reco Items — manual review (gate the summary until saved) ──────
+        # ITAD shipments with a missing bill are candidates for exclusion. The user
+        # ticks the ones to KEEP in Reco Items (excluded from calcs); unticked ones
+        # flow into the Details & summary. The summary only computes AFTER Save.
+        _cand = reports.reco_candidates(profit_df)
+        _sig = tuple(sorted(_cand["Shipment ID"].tolist())) if len(_cand) else ()
+
+        def _render_reco_review():
+            st.markdown("### 🧾 ITAD Reco Items — manual review")
+            st.caption("Tick a shipment to **keep it in Reco Items** (excluded from the "
+                       "Details & summary). Unticked shipments are **included** in the "
+                       "calculations. Click **Save** to (re)compute the summary.")
+            _prev = st.session_state.get("reco_selected", set())
+            _ed = _cand.copy()
+            _ed["Reco? (exclude)"] = _ed["Shipment ID"].isin(_prev)
+            _res = st.data_editor(
+                _ed, hide_index=True, use_container_width=True, key="reco_editor",
+                disabled=["Shipment ID", "Date", "Buyer Name", "Material", "Amount"])
+            if st.button("💾 Save & compute summary", key="reco_save"):
+                st.session_state["reco_selected"] = set(
+                    _res.loc[_res["Reco? (exclude)"], "Shipment ID"].astype(str))
+                st.session_state["reco_sig"] = _sig
+                st.rerun()
+
+        _reco_ready = (len(_cand) == 0) or (st.session_state.get("reco_sig") == _sig)
+        if not _reco_ready:
+            st.warning(f"{len(_cand)} ITAD shipment(s) have a missing bill — review below, "
+                       "then **Save** to compute the summary.")
+            _render_reco_review()
+            st.stop()
+        reco_ships = st.session_state.get("reco_selected", set()) if len(_cand) else set()
+
         # ── Re-Commerce WITH / WITHOUT Samsung variants ─────────────────────
         # If manual Re-Commerce detail(s) are stored, Re-Commerce is driven by
         # them (≤ cutoff) + live Amazon logic (> cutoff), and we produce a
@@ -1274,7 +1306,8 @@ elif page == "Summary Report":
         _reco_skip = {"Re-Commerce"} if (not _reco_w.empty or not _reco_wo.empty) else set()
 
         def _build(_pdf):
-            _s = reports.summaries_by_category(_pdf, _ar, _ap, op_cost_bills=_obills)
+            _s = reports.summaries_by_category(_pdf, _ar, _ap, op_cost_bills=_obills,
+                                               reco_ships=reco_ships)
             try:
                 _s = _frozen.apply_frozen(_s, _app_dir, _open_m, skip_tabs=_reco_skip)
             except Exception as _fe:
@@ -1312,11 +1345,19 @@ elif page == "Summary Report":
                 if name != "All Categories":
                     st.download_button(
                         f"⬇ Download {name} (Excel — Summary · Receivables · Payables · Report)",
-                        reports.combined_workbook(summaries, _sel_pdf, _ar, _ap, vertical=name),
+                        reports.combined_workbook(summaries, _sel_pdf, _ar, _ap, vertical=name, reco_ships=reco_ships),
                         file_name=f"profitability_{safe}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         key=f"dl_comb_{name}",
                     )
+
+        # ── Reco Items review table (under the summary) — adjust & re-Save ──────
+        if len(_cand):
+            st.markdown("---")
+            _in_reco = len(reco_ships)
+            st.caption(f"🧾 {_in_reco} of {len(_cand)} candidate shipment(s) currently in "
+                       f"Reco Items (excluded); the rest are included in the calculations.")
+            _render_reco_review()
 
         st.markdown("---")
         # One "Download ALL" per variant (two when with/without Samsung exist)
@@ -1327,7 +1368,7 @@ elif page == "Summary Report":
                                          else "_" + _lbl.lower().replace(" ", "_")) + ".xlsx"
             st.download_button(
                 f"⬇ Download ALL Verticals{_sfx} (Excel — Summary · Receivables · Payables · Report)",
-                reports.combined_workbook(_s, _pdf, _ar, _ap),
+                reports.combined_workbook(_s, _pdf, _ar, _ap, reco_ships=reco_ships),
                 file_name=_fn,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key=f"dl_all_{_lbl}",
@@ -1385,7 +1426,7 @@ elif page == "Summary Report":
                     for _v in _s.keys():
                         if _v == "All Categories":
                             continue
-                        _wb = reports.combined_workbook(_s, _pdf, _ar, _ap, vertical=_v)
+                        _wb = reports.combined_workbook(_s, _pdf, _ar, _ap, vertical=_v, reco_ships=reco_ships)
                         _rcpts = only_to or _rbv.get(_v, _base_to)
                         _safe = _v.replace("(", "_").replace(")", "").replace("/", "-").replace(" ", "_")
                         _vbody = _body.replace("Profitability Report", f"Profitability Report - {_v}")
@@ -1395,7 +1436,7 @@ elif page == "Summary Report":
                             html=_mail_html(_s, _v, _vbody))
                         results.append(f"{'✅' if _ok else '❌'} {_v}{_vsfx}: {_msg}")
                 else:
-                    _wb = reports.combined_workbook(_s, _pdf, _ar, _ap)
+                    _wb = reports.combined_workbook(_s, _pdf, _ar, _ap, reco_ships=reco_ships)
                     _ok, _msg = _mailer.send_report(
                         only_to or _base_to, f"{_subj}{_vsfx}", _body, _wb,
                         f"profitability_all{_fsfx}.xlsx", _cfg,

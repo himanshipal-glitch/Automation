@@ -107,7 +107,7 @@ with st.sidebar:
     st.markdown("---")
     # build tag — bump when pushing significant changes; confirms which version
     # a deployed instance is running (hosted apps can lag behind the repo)
-    st.caption("build: **v2.9.6 — fix date-parse day/month swap + component-wise combo shipment matching**")
+    st.caption("build: **v3.0 — Enterprise: Custom Duty bill entry + per-month Operational Cost overrides**")
     status = db.all_db_status()
     loaded = [s for s, v in status.items() if v["exists"]]
     st.caption(f"{len(loaded)} / {len(status)} sheets loaded")
@@ -1298,6 +1298,76 @@ elif page == "Summary Report":
             st.stop()
         reco_ships = st.session_state.get("reco_selected", set()) if len(_cand) else set()
 
+        # ── ENTERPRISE manual inputs (after Reco review) ────────────────────
+        # 1) Custom Duty bills: shipments with NO bill/invoice side in Zoho,
+        #    entered as manual purchases into a chosen month. Enterprise ONLY.
+        # 2) Operational Cost per month: user override for the Enterprise
+        #    summary row. Both persist until edited again.
+        _cd_store = db.load_custom_duty()
+        with st.expander(f"🛃 Enterprise — Custom Duty bills ({len(_cd_store)} stored)"):
+            st.caption("Shipments with **no bill/invoice in Zoho**, added manually as "
+                       "purchases. Each row lands in the Enterprise profitability in the "
+                       "selected month and **stays stored** until edited here. "
+                       "Month format: `Jul-26`.")
+            _cd_seed = _cd_store if not _cd_store.empty else pd.DataFrame(
+                {"Shipment ID": pd.Series(dtype="str"),
+                 "Month (mmm-yy)": pd.Series(dtype="str"),
+                 "Supplier Name": pd.Series(dtype="str"),
+                 "Amount": pd.Series(dtype="float")})
+            _cd_res = st.data_editor(_cd_seed, num_rows="dynamic",
+                                     use_container_width=True, key="cd_editor")
+            if st.button("💾 Save Custom Duty bills", key="cd_save"):
+                _n = db.save_custom_duty(_cd_res)
+                st.success(f"Stored {_n} Custom Duty bill(s).")
+                st.rerun()
+        if not _cd_store.empty:
+            profit_df = reports.inject_custom_duty(profit_df, _cd_store)
+
+        _ent_oc = db.load_enterprise_opcost()
+        with st.expander(f"⚙️ Enterprise — Operational Cost overrides ({len(_ent_oc)} month(s) stored)"):
+            st.caption("Set the Enterprise **Operational Cost** for any month — the summary "
+                       "row (and Net Margin) uses your value, overriding the computed/frozen "
+                       "figure, and **stays stored** until you change it. Month format: `Jul-26`.")
+            _oc_seed = (pd.DataFrame({"Month (mmm-yy)": list(_ent_oc.keys()),
+                                      "Operational Cost": list(_ent_oc.values())})
+                        if _ent_oc else
+                        pd.DataFrame({"Month (mmm-yy)": pd.Series(dtype="str"),
+                                      "Operational Cost": pd.Series(dtype="float")}))
+            _oc_res = st.data_editor(_oc_seed, num_rows="dynamic",
+                                     use_container_width=True, key="ent_oc_editor")
+            if st.button("💾 Save Operational Cost", key="ent_oc_save"):
+                _n = db.save_enterprise_opcost(_oc_res)
+                st.success(f"Stored operational cost for {_n} month(s).")
+                st.rerun()
+
+        def _apply_ent_opcost(_s):
+            """Overwrite the Enterprise Operational Cost row with the stored user
+            values, re-derive Net Margin / NM% for those months, and re-sum FY."""
+            _df = _s.get("Enterprise")
+            if _df is None or not _ent_oc:
+                return _s
+            def g(i, c):
+                return float(pd.to_numeric(pd.Series([_df.iat[i, c]]), errors="coerce").fillna(0).iloc[0])
+            _mcols = [c for c in _df.columns if c not in ("Metric", "FY Total")]
+            for _mn, _val in _ent_oc.items():
+                if _mn not in _df.columns or len(_df) <= 7:
+                    continue
+                _c = _df.columns.get_loc(_mn)
+                _gm, _nm0, _oc0 = g(3, _c), g(6, _c), g(5, _c)
+                _tc = _gm - _nm0 - _oc0                      # absolute transport (unchanged)
+                _df.iat[5, _c] = round(_val, 0)
+                _nm = _gm - _tc - _val
+                _df.iat[6, _c] = round(_nm, 0)
+                _sales = g(1, _c)
+                _df.iat[7, _c] = round(100 * _nm / _sales, 2) if _sales else 0.0
+            if "FY Total" in _df.columns and len(_df) > 7:
+                _fy = _df.columns.get_loc("FY Total")
+                _df.iat[5, _fy] = round(sum(g(5, _df.columns.get_loc(m)) for m in _mcols), 0)
+                _df.iat[6, _fy] = round(sum(g(6, _df.columns.get_loc(m)) for m in _mcols), 0)
+                _fs = g(1, _fy)
+                _df.iat[7, _fy] = round(100 * g(6, _fy) / _fs, 2) if _fs else 0.0
+            return _s
+
         # ── Re-Commerce = a normal vertical (Samsung rule removed) ──────────
         # Closed months come from the newest 'Profitability Report of Recommerce
         # till DD-MM-YYYY.xlsx' via the frozen overlay (same as every other
@@ -1313,7 +1383,7 @@ elif page == "Summary Report":
                 _s = _frozen.apply_frozen(_s, _app_dir, _open_m, skip_tabs=_reco_skip)
             except Exception as _fe:
                 st.caption(f"⚠ Frozen-month overlay skipped: {_fe}")
-            return _s
+            return _apply_ent_opcost(_s)
 
         _labels = list(_variants.keys())
         if len(_labels) > 1:

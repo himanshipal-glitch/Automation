@@ -260,6 +260,76 @@ def ib_warehouse_count() -> int:
     return len(load_ib_warehouse_shipments())
 
 
+# ── ENTERPRISE manual inputs ──────────────────────────────────────────────────
+# 1) Custom Duty bills: shipments with NO bill/invoice side in Zoho, entered
+#    manually as purchases into a user-selected month (Enterprise only).
+# 2) Operational Cost per month: user-entered override for the Enterprise
+#    summary row. Both persist until the user edits them again.
+CUSTOM_DUTY_PATH = PERSIST_DIR / "enterprise_custom_duty.parquet"
+ENT_OPCOST_PATH  = PERSIST_DIR / "enterprise_opcost.parquet"
+
+
+def _save_small(df: pd.DataFrame, path) -> int:
+    try:
+        df.to_parquet(path, index=False)
+    except Exception:
+        df.to_pickle(path.with_suffix(".pkl"))
+    return len(df)
+
+
+def _load_small(path) -> pd.DataFrame:
+    for pp in (path, path.with_suffix(".pkl")):
+        if pp.exists():
+            try:
+                return (pd.read_parquet(pp) if pp.suffix == ".parquet"
+                        else pd.read_pickle(pp))
+            except Exception:
+                pass
+    return pd.DataFrame()
+
+
+def save_custom_duty(df: pd.DataFrame) -> int:
+    """Full snapshot — replaces. Keeps only rows with a shipment id, a parseable
+    mmm-yy month and a non-zero amount."""
+    if df is None:
+        return 0
+    d = df.copy()
+    d.columns = [str(c) for c in d.columns]
+    ship = d.iloc[:, 0].astype(str).str.strip()
+    mon  = d.iloc[:, 1].astype(str).str.strip()
+    amt  = pd.to_numeric(d.iloc[:, 3] if d.shape[1] > 3 else d.iloc[:, -1], errors="coerce")
+    ok = ship.ne("") & ship.str.lower().ne("nan") \
+         & pd.to_datetime(mon, format="%b-%y", errors="coerce").notna() \
+         & amt.notna() & amt.ne(0)
+    d = d[ok].reset_index(drop=True)
+    return _save_small(d, CUSTOM_DUTY_PATH)
+
+
+def load_custom_duty() -> pd.DataFrame:
+    return _load_small(CUSTOM_DUTY_PATH)
+
+
+def save_enterprise_opcost(df: pd.DataFrame) -> int:
+    """Full snapshot — replaces. Rows: Month (mmm-yy) + Amount."""
+    if df is None:
+        return 0
+    d = df.copy()
+    mon = d.iloc[:, 0].astype(str).str.strip()
+    amt = pd.to_numeric(d.iloc[:, 1], errors="coerce")
+    ok = pd.to_datetime(mon, format="%b-%y", errors="coerce").notna() & amt.notna()
+    d = d[ok].reset_index(drop=True)
+    return _save_small(d, ENT_OPCOST_PATH)
+
+
+def load_enterprise_opcost() -> dict:
+    """{mmm-yy: amount}"""
+    d = _load_small(ENT_OPCOST_PATH)
+    if d.empty:
+        return {}
+    return {str(m).strip(): float(a) for m, a in
+            zip(d.iloc[:, 0], pd.to_numeric(d.iloc[:, 1], errors="coerce").fillna(0))}
+
+
 # ── Accumulated profitability-details store (permanent) ──────────────────────
 # Zoho's MIS export is ROLLING — each one only carries recent invoices, so a
 # month's line rows vanish from later exports. This store accumulates every

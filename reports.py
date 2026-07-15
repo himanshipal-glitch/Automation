@@ -116,19 +116,77 @@ def _ib_warehouse_set() -> set:
         return set()
 
 
+def _custom_duty_ships() -> set:
+    """Shipment IDs entered as Enterprise Custom Duty bills (uppercased) —
+    always forced into the B2B (Enterprise) bucket."""
+    try:
+        import database as _db
+        d = _db.load_custom_duty()
+        if d.empty:
+            return set()
+        return {str(s).strip().upper() for s in d.iloc[:, 0]}
+    except Exception:
+        return set()
+
+
 def _ib_split_masks(mask: pd.Series, ship: pd.Series,
                     df: pd.DataFrame | None = None) -> tuple[pd.Series, pd.Series]:
     """(b2b, warehouse) row masks within Institutional Business.
 
     B2B = SH-prefixed EXCEPT internal 'MPIB' ones (warehouse/internal
     transfers), requiring a vendor invoice when `df` is given;
-    Warehouse = non-SH OR containing 'MPIB'."""
+    Warehouse = non-SH OR containing 'MPIB'.
+    Custom-Duty shipments (manual purchases, Enterprise-only) are ALWAYS B2B."""
     _sh = ship.astype(str).str.strip().str.upper()
     b2b = mask & _sh.str.startswith("SH") & ~_sh.str.contains("MPIB", na=False)
     wh  = mask & (~_sh.str.startswith("SH") | _sh.str.contains("MPIB", na=False))
     if df is not None:
         b2b = b2b & _ib_has_vendor_invoice(df, ship)
+    _cd = _custom_duty_ships()
+    if _cd:
+        _in_cd = mask & _sh.isin(_cd)
+        b2b = b2b | _in_cd
+        wh  = wh & ~_in_cd
     return b2b, wh
+
+
+def inject_custom_duty(profit_df: pd.DataFrame, cd: pd.DataFrame) -> pd.DataFrame:
+    """Append the Enterprise Custom Duty bills (manual purchases, no invoice/
+    bill side in Zoho) as profitability rows in the user-selected month.
+    cd columns: 0 = Shipment ID, 1 = Month (mmm-yy), 2 = Supplier Name,
+    3 = Amount. Rows carry ONLY a purchase cost — sales side stays zero."""
+    if cd is None or getattr(cd, "empty", True) or profit_df.empty:
+        return profit_df
+    _mdt = pd.to_datetime(cd.iloc[:, 1].astype(str).str.strip(),
+                          format="%b-%y", errors="coerce")
+    rows = []
+    for i in range(len(cd)):
+        if pd.isna(_mdt.iloc[i]):
+            continue
+        r = {c: None for c in profit_df.columns}
+        dt = _mdt.iloc[i]
+        r[profit_df.columns[1]]  = dt.strftime("%B")             # Month
+        r[profit_df.columns[2]]  = dt.strftime("%Y-%m-%d")       # Date (1st of month)
+        r[profit_df.columns[3]]  = str(cd.iloc[i, 0]).strip()    # Shipment ID
+        if profit_df.shape[1] > 4:
+            r[profit_df.columns[4]] = str(cd.iloc[i, 2]) if cd.shape[1] > 2 else ""  # Supplier
+        r[profit_df.columns[85]] = "Institutional Business"      # → Enterprise via _custom_duty_ships
+        amt = float(pd.to_numeric(pd.Series([cd.iloc[i, 3] if cd.shape[1] > 3 else cd.iloc[i, -1]]),
+                                  errors="coerce").fillna(0).iloc[0])
+        for name in ("Purchase Price",):
+            if name in profit_df.columns:
+                r[name] = amt
+        for name in ("Cost Source",):
+            if name in profit_df.columns:
+                r[name] = "Custom Duty (manual entry)"
+        for name in ("Resale Note",):
+            if name in profit_df.columns:
+                r[name] = "Custom Duty bill — manual purchase, no invoice/bill in Zoho"
+        rows.append(r)
+    if not rows:
+        return profit_df
+    return pd.concat([profit_df, pd.DataFrame(rows, columns=profit_df.columns)],
+                     ignore_index=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

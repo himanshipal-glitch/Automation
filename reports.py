@@ -72,6 +72,25 @@ def _ib_has_vendor_invoice(df: pd.DataFrame, ship: pd.Series) -> pd.Series:
     return has_inv.groupby(ship).transform("max").astype(bool)
 
 
+# AR invoice numbers counted in ENTERPRISE receivables regardless of the
+# B2B/Warehouse shipment split (manually confirmed Enterprise invoices that
+# carry MPIB-style numbering). The receivables rule itself is unchanged —
+# these are simply added to the Enterprise invoice set.
+ENTERPRISE_EXTRA_AR_INVOICES: set = {
+    "26/MPPIB/DN0005",
+    "26/MPPIB/INV0553",
+    "26/MPPIB/INV0581",
+    "26/MPPIB/INV0599",
+    "26/MPPIB/INV0603",
+    "27/MPIB/26IN0216",
+    "26/MPPIB/INV0886",
+    "27/MPIB/26IN0229",
+    "26/MPPIB/INV0895",
+    "27/MPIB/26IN0231",
+    "27/MPIB/26IN0230",
+}
+
+
 def _ib_warehouse_set() -> set:
     """The persistent IB(Warehouse) shipment list (uppercased). Currently
     DORMANT — the split uses the SH heuristic (see _ib_split_masks); the store
@@ -763,7 +782,8 @@ def _attribute_ar(ar_df, profit_df):
         return df
     imap = _inv_tab_map(profit_df)
     s = df[tn].astype(str).str.strip()
-    df["_tab"] = s.map(lambda x: imap.get(x) or _ar_token_tab(x))
+    df["_tab"] = s.map(lambda x: "Enterprise" if x in ENTERPRISE_EXTRA_AR_INVOICES
+                       else (imap.get(x) or _ar_token_tab(x)))
     return df
 
 
@@ -932,7 +952,8 @@ def summaries_by_category(profit_df: pd.DataFrame,
                             if "transaction" in str(c).lower() and "number" in str(c).lower()), None)
                 _bc = next((c for c in ar_df.columns if "balance" in str(c).lower()), None)
                 if _tn and _bc:
-                    _b2b_invs = set(main_df[b2b].iloc[:, 39].astype(str).str.strip()) - {"", "nan"}
+                    _b2b_invs = (set(main_df[b2b].iloc[:, 39].astype(str).str.strip())
+                                 | ENTERPRISE_EXTRA_AR_INVOICES) - {"", "nan"}
                     _sel = ar_df[ar_df[_tn].astype(str).str.strip().isin(_b2b_invs)]
                     # net unused credits FIFO — each customer's credit settles
                     # their oldest open invoice first, then spills onto newer ones

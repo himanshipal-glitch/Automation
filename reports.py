@@ -752,12 +752,15 @@ def _ar_token_tab(tn: str) -> str:
 def _inv_tab_map(profit_df: pd.DataFrame) -> dict:
     """invoice-number → tab label, from the profitability rows (handles the
     Enterprise/Processing Center split and the MP-warehouse carve-out)."""
-    inv  = profit_df.iloc[:, 39].astype(str).str.strip()
-    cat  = profit_df.iloc[:, 85].astype(str).str.strip()
-    ship = profit_df.iloc[:, 3].astype(str).str.strip().str.upper()
+    # fillna BEFORE astype — Arrow-backed columns keep NaN through .astype(str),
+    # so a missing invoice number would arrive here as a float and crash .lower()
+    inv  = profit_df.iloc[:, 39].fillna("").astype(str).str.strip()
+    cat  = profit_df.iloc[:, 85].fillna("").astype(str).str.strip()
+    ship = profit_df.iloc[:, 3].fillna("").astype(str).str.strip().str.upper()
     m = {}
     for iv, c, sh in zip(inv, cat, ship):
-        if not iv or iv.lower() == "nan":
+        iv, c, sh = str(iv), str(c), str(sh)
+        if not iv or iv.lower() in ("nan", "none", "nat"):
             continue
         cl = c.lower().replace(" ", "")
         if cl.startswith("institutional"):
@@ -781,9 +784,9 @@ def _attribute_ar(ar_df, profit_df):
         df["_tab"] = ""
         return df
     imap = _inv_tab_map(profit_df)
-    s = df[tn].astype(str).str.strip()
-    df["_tab"] = s.map(lambda x: "Enterprise" if x in ENTERPRISE_EXTRA_AR_INVOICES
-                       else (imap.get(x) or _ar_token_tab(x)))
+    s = df[tn].fillna("").astype(str).str.strip()
+    df["_tab"] = s.map(lambda x: "Enterprise" if str(x) in ENTERPRISE_EXTRA_AR_INVOICES
+                       else (imap.get(str(x)) or _ar_token_tab(str(x))))
     return df
 
 

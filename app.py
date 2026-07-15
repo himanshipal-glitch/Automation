@@ -107,7 +107,7 @@ with st.sidebar:
     st.markdown("---")
     # build tag — bump when pushing significant changes; confirms which version
     # a deployed instance is running (hosted apps can lag behind the repo)
-    st.caption("build: **v2.9.2 — Re-Commerce details driven by the FIXED report (till 12-07); new shipments via Amazon chain**")
+    st.caption("build: **v2.9.3 — Enterprise split reverted to SH-prefix + vendor-invoice heuristic**")
     status = db.all_db_status()
     loaded = [s for s, v in status.items() if v["exists"]]
     st.caption(f"{len(loaded)} / {len(status)} sheets loaded")

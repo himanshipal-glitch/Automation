@@ -267,6 +267,27 @@ def apply_recommerce_manual(base_df: pd.DataFrame,
     if manual_df is None or getattr(manual_df, "empty", True):
         return base_df
     m = manual_df.reindex(columns=base_df.columns).copy()      # align to engine schema
+    # provenance: manual rows are the signed-off fixed report — mark them so they
+    # don't read as missing-bill Reco candidates
+    _csc = next((c for c in m.columns
+                 if "".join(ch for ch in str(c).lower() if ch.isalnum()) == "costsource"), None)
+    if _csc is not None:
+        _cs = m[_csc].astype(str).str.strip()
+        m[_csc] = _cs.where(~_cs.isin(["", "nan", "None", "NaT"]), "Manual (fixed report)")
+    # the manual IS the Re-Commerce report — force the vertical tag (spreadsheet
+    # exports often lose the Broad Category formula values)
+    if m.shape[1] > 85:
+        m.isetitem(85, pd.Series("Re-Commerce", index=m.index, dtype=object))
+    # bucket by the manual's own Month column — its Date column can carry the
+    # SOURCE bill date (e.g. an old purchase resold this FY), but the signed-off
+    # month is the Month column. Rows whose Date disagrees get the month's 1st
+    # so every downstream month bucket matches the fixed report.
+    _mon = m.iloc[:, 1].astype(str).str.strip()
+    _mdt = pd.to_datetime(_mon, format="%b-%y", errors="coerce")
+    _dt = pd.to_datetime(m.iloc[:, 2], errors="coerce", format="mixed", dayfirst=True)
+    _fix = _mdt.notna() & (_dt.isna() | (_dt.dt.strftime("%b-%y") != _mon))
+    _new_dt = _dt.where(~_fix, _mdt)
+    m.isetitem(2, _new_dt.dt.strftime("%Y-%m-%d").astype(object).where(_new_dt.notna(), m.iloc[:, 2]))
     known = set(known_ships) if known_ships is not None else \
         set(m.iloc[:, 3].astype(str).str.strip())
     cat = base_df.iloc[:, 85].astype(str)

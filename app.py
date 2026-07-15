@@ -107,7 +107,7 @@ with st.sidebar:
     st.markdown("---")
     # build tag — bump when pushing significant changes; confirms which version
     # a deployed instance is running (hosted apps can lag behind the repo)
-    st.caption("build: **v2.9.1 — Re-Commerce frozen thru Jun (till-12-07 file); Amazon-chain-only after 12-07; FIFO detail merge**")
+    st.caption("build: **v2.9.2 — Re-Commerce details driven by the FIXED report (till 12-07); new shipments via Amazon chain**")
     status = db.all_db_status()
     loaded = [s for s, v in status.items() if v["exists"]]
     st.caption(f"{len(loaded)} / {len(status)} sheets loaded")
@@ -1240,6 +1240,16 @@ elif page == "Summary Report":
         _ar = ar_df if not ar_df.empty else None
         _ap = ap_df if not ap_df.empty else None
         _obills = op_bills if not op_bills.empty else None
+
+        # ── Re-Commerce: the stored FIXED report drives all rows ≤ its cutover ──
+        # (12-07-2026, signed off). Only genuinely-new MIS shipments (not in the
+        # fixed sheet) are added — those carry the live Amazon-chain cost. This
+        # runs BEFORE the Reco gate/summary so every downstream view (candidates,
+        # summary, workbook) sees the fixed rows.
+        _rc_fixed = db.load_recommerce_manual(True)
+        if not _rc_fixed.empty:
+            profit_df = reports.apply_recommerce_manual(profit_df, _rc_fixed,
+                                                        exclude_samsung_new=False)
 
         import frozen as _frozen
         _app_dir = str(db.DB_DIR.parent)              # the AUTOMATION folder

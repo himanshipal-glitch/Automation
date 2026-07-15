@@ -632,7 +632,13 @@ def build_profitability(merged_df: pd.DataFrame,
     # details instead of leaving them stacked at the bottom. Same-date rows keep
     # their original order; undated rows stay at the end.
     if "Date" in out.columns:
-        _d = pd.to_datetime(out["Date"], errors="coerce", format="mixed", dayfirst=True)
+        # ISO first, dayfirst only for the leftovers — dayfirst over an ISO
+        # date silently swaps day/month when the day is ≤ 12
+        _d = pd.to_datetime(out["Date"].astype(object), errors="coerce", format="ISO8601")
+        _miss = _d.isna()
+        if _miss.any():
+            _d.loc[_miss] = pd.to_datetime(out["Date"].astype(object)[_miss],
+                                           errors="coerce", dayfirst=True, format="mixed")
         _order = pd.concat([_d[_d.notna()].sort_values(kind="stable"),
                             _d[_d.isna()]]).index
         out = out.loc[_order].reset_index(drop=True)

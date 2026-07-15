@@ -72,6 +72,20 @@ def _ib_has_vendor_invoice(df: pd.DataFrame, ship: pd.Series) -> pd.Series:
     return has_inv.groupby(ship).transform("max").astype(bool)
 
 
+def parse_dates(s: pd.Series) -> pd.Series:
+    """Parse a Date column that mixes ISO (YYYY-MM-DD) and Indian (DD-MM-YYYY)
+    strings. ISO is tried FIRST — running dayfirst over ISO silently swaps
+    day/month for days ≤ 12 (2026-04-12 → Dec 4!); dayfirst applies only to
+    the non-ISO leftovers."""
+    s = s.astype(object)
+    d = pd.to_datetime(s, errors="coerce", format="ISO8601")
+    miss = d.isna()
+    if miss.any():
+        d2 = pd.to_datetime(s[miss], errors="coerce", dayfirst=True, format="mixed")
+        d.loc[miss] = d2
+    return d
+
+
 # AR invoice numbers counted in ENTERPRISE receivables regardless of the
 # B2B/Warehouse shipment split (manually confirmed Enterprise invoices that
 # carry MPIB-style numbering). The receivables rule itself is unchanged —
@@ -298,16 +312,22 @@ def apply_recommerce_manual(base_df: pd.DataFrame,
     # so every downstream month bucket matches the fixed report.
     _mon = m.iloc[:, 1].astype(str).str.strip()
     _mdt = pd.to_datetime(_mon, format="%b-%y", errors="coerce")
-    _dt = pd.to_datetime(m.iloc[:, 2], errors="coerce", format="mixed", dayfirst=True)
+    _dt = parse_dates(m.iloc[:, 2])
     _fix = _mdt.notna() & (_dt.isna() | (_dt.dt.strftime("%b-%y") != _mon))
     _new_dt = _dt.where(~_fix, _mdt)
     m.isetitem(2, _new_dt.dt.strftime("%Y-%m-%d").astype(object).where(_new_dt.notna(), m.iloc[:, 2]))
     known = set(known_ships) if known_ships is not None else \
         set(m.iloc[:, 3].astype(str).str.strip())
+    # combo shipments ("A, B") share components with the manual's own combos —
+    # compare COMPONENT-wise, else a re-combined ID double-counts sales that the
+    # fixed report already carries under a different combination
+    known_parts = {p.strip() for s in known for p in str(s).split(",") if p.strip()}
     cat = base_df.iloc[:, 85].astype(str)
     is_rc = cat.str.contains(r"re-commerce|recommerce", case=False, na=False)
     ship = base_df.iloc[:, 3].astype(str).str.strip()
-    new_rc = is_rc & ~ship.isin(known)                 # genuinely new RC shipments
+    _is_known = ship.map(lambda s: any(p.strip() in known_parts
+                                       for p in str(s).split(",") if p.strip()))
+    new_rc = is_rc & ~_is_known                        # genuinely new RC shipments
     if exclude_samsung_new:                            # without-Samsung report:
         new_rc = new_rc & ~_is_samsung(base_df)        # keep only NON-Samsung new ones
     keep = ~is_rc | new_rc
@@ -1389,7 +1409,7 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
                 # genuinely-new shipments the MIS carries for frozen months (a
                 # shipment absent from the manual file) — merged in, disclosed
                 # via Row Source, so late entries aren't silently lost.
-                _mm = pd.to_datetime(_df_t.iloc[:, 2], errors="coerce").dt.strftime("%b-%y")
+                _mm = parse_dates(_df_t.iloc[:, 2]).dt.strftime("%b-%y")
                 _in_frozen = _mm.isin(_fmonths)
                 _known = (set(_al["Shipment ID"].astype(str).str.strip())
                           if "Shipment ID" in _al.columns else set())
@@ -1405,8 +1425,7 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
                 # FIFO month order within the tab — frozen and live rows
                 # interleaved chronologically (Apr, May, Jun, …)
                 if "Date" in _tab_df.columns:
-                    _dts = pd.to_datetime(_tab_df["Date"], errors="coerce",
-                                          format="mixed", dayfirst=True)
+                    _dts = parse_dates(_tab_df["Date"])
                     _ord = pd.concat([_dts[_dts.notna()].sort_values(kind="stable"),
                                       _dts[_dts.isna()]]).index
                     _tab_df = _tab_df.loc[_ord].reset_index(drop=True)

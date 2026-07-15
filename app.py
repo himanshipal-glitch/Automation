@@ -107,7 +107,7 @@ with st.sidebar:
     st.markdown("---")
     # build tag — bump when pushing significant changes; confirms which version
     # a deployed instance is running (hosted apps can lag behind the repo)
-    st.caption("build: **v2.9.5 — fix: NaN invoice numbers crash summary (Arrow-backed manual rows)**")
+    st.caption("build: **v2.9.6 — fix date-parse day/month swap + component-wise combo shipment matching**")
     status = db.all_db_status()
     loaded = [s for s, v in status.items() if v["exists"]]
     st.caption(f"{len(loaded)} / {len(status)} sheets loaded")
@@ -1253,7 +1253,7 @@ elif page == "Summary Report":
 
         import frozen as _frozen
         _app_dir = str(db.DB_DIR.parent)              # the AUTOMATION folder
-        _pdates = pd.to_datetime(profit_df.iloc[:, 2], errors="coerce")
+        _pdates = reports.parse_dates(profit_df.iloc[:, 2])
         _open_m = _pdates.max().strftime("%b-%y") if _pdates.notna().any() else None
 
         # ── Reco Items — manual review, ALL verticals (gate the summary until saved) ──

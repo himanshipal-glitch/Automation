@@ -1344,19 +1344,39 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
                       if vertical else split_by_category(_live_src))
         _parts = []
         for _t, _df_t in rep_by_tab.items():
+            _tab_parts = []
             _f = _fdet.get(_t)
             if _f is not None:
                 _fdf, _fmonths = _f
                 _al = _align(_fdf).copy()
                 _al["Row Source"] = f"Manual file ({_t})"
-                _parts.append(_al)
-                # live rows for this tab: only months NOT already frozen above
+                _tab_parts.append(_al)
+                # live rows for this tab: months NOT already frozen above, PLUS
+                # genuinely-new shipments the MIS carries for frozen months (a
+                # shipment absent from the manual file) — merged in, disclosed
+                # via Row Source, so late entries aren't silently lost.
                 _mm = pd.to_datetime(_df_t.iloc[:, 2], errors="coerce").dt.strftime("%b-%y")
-                _df_t = _df_t[~_mm.isin(_fmonths)]
+                _in_frozen = _mm.isin(_fmonths)
+                _known = (set(_al["Shipment ID"].astype(str).str.strip())
+                          if "Shipment ID" in _al.columns else set())
+                _ship_l = _df_t.iloc[:, 3].astype(str).str.strip()
+                _extra = _in_frozen & ~_ship_l.isin(_known) & ~_ship_l.isin(["", "nan"])
+                _df_t = _df_t[~_in_frozen | _extra]
             if len(_df_t):
                 _lv = _df_t.reindex(columns=_tgt).copy()
                 _lv["Row Source"] = "Live (MIS)"
-                _parts.append(_lv)
+                _tab_parts.append(_lv)
+            if _tab_parts:
+                _tab_df = pd.concat(_tab_parts, ignore_index=True)
+                # FIFO month order within the tab — frozen and live rows
+                # interleaved chronologically (Apr, May, Jun, …)
+                if "Date" in _tab_df.columns:
+                    _dts = pd.to_datetime(_tab_df["Date"], errors="coerce",
+                                          format="mixed", dayfirst=True)
+                    _ord = pd.concat([_dts[_dts.notna()].sort_values(kind="stable"),
+                                      _dts[_dts.isna()]]).index
+                    _tab_df = _tab_df.loc[_ord].reset_index(drop=True)
+                _parts.append(_tab_df)
         if _parts:
             _rep = pd.concat(_parts, ignore_index=True)
         else:

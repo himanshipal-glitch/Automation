@@ -6,6 +6,11 @@ Column names are sanitized on DB write (spaces → underscores).
 
 import pandas as pd
 
+# Re-Commerce costing cutover: the signed-off report up to this date is stored/
+# frozen; MIS rows dated AFTER it are costed by the Amazon-invoice chain ONLY
+# (the older-bill-by-shipment fallback is not applied to them).
+RECOMMERCE_AMAZON_ONLY_AFTER = pd.Timestamp("2026-07-12")
+
 
 def _col(df: pd.DataFrame, *candidates: str) -> str | None:
     """Return the first candidate column name found in df (raw or sanitized)."""
@@ -517,14 +522,20 @@ def merge_invoice_bill(inv_df: pd.DataFrame, bill_df: pd.DataFrame,
                 hist_filled += 1
                 continue
 
-        # 2. Older bill by shipment id(s)
-        lines = [ln for s in ships for ln in hist_idx.get((s, nm), [])]
-        cost, det = _take_lines(lines, q)
-        if cost > 0:
-            assigned[pos] = _make_row(cost, det, q)
-            cost_source[pos] = "Older Bill (shipment)"
-            hist_filled += 1
-            continue
+        # 2. Older bill by shipment id(s) — ONLY for rows dated on/before the
+        # Re-Commerce cutover (12-07-2026). The signed-off report up to that
+        # date is stored/frozen; every later MIS row is costed by the
+        # Amazon-invoice chain ONLY (no older-bill fallback).
+        _idate = pd.to_datetime(inv.at[pos, "Invoice_Date"], errors="coerce") \
+            if "Invoice_Date" in inv.columns else pd.NaT
+        if pd.isna(_idate) or _idate <= RECOMMERCE_AMAZON_ONLY_AFTER:
+            lines = [ln for s in ships for ln in hist_idx.get((s, nm), [])]
+            cost, det = _take_lines(lines, q)
+            if cost > 0:
+                assigned[pos] = _make_row(cost, det, q)
+                cost_source[pos] = "Older Bill (shipment)"
+                hist_filled += 1
+                continue
 
         # (Weighted-average fallback removed — we rely on the Amazon-invoice
         #  chain and exact older-bill shipment match only.)

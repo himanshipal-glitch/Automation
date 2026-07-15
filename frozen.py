@@ -191,17 +191,18 @@ def parse_summary(path: str, sheet_candidates: list[str]) -> dict:
             if idx == 0:
                 qty[m] = val
 
-    # Per-kg rows are RECOMPUTED (sales/qty_kg, pur/qty_kg) rather than copied —
-    # the manual's own per-unit rows use inconsistent scales. Quantity stays in MT
-    # for weight verticals, so the per-kg divisor is qty×1000 there.
+    # Per-kg rows: the manual file's own values are the signed-off truth — keep
+    # them verbatim when present; RECOMPUTE (sales/qty_kg, pur/qty_kg) only when
+    # the file doesn't carry them. Quantity stays in MT for weight verticals,
+    # so the recompute divisor is qty×1000 there.
     for m in month_cols.values():
         q = (qty.get(m) or 0.0) * (1000 if qty_is_mt else 1)
         c = out[m]
-        if 1 in c:
+        if 1 in c and 8 not in c:
             c[8] = round(c[1] / q, 2) if q else 0.0
-        if 2 in c:
+        if 2 in c and 9 not in c:
             c[9] = round(c[2] / q, 2) if q else 0.0
-        if tc_abs[m] is not None:
+        if tc_abs[m] is not None and 10 not in c:
             c[10] = round(tc_abs[m] / q, 2) if q else 0.0
     return out
 

@@ -107,7 +107,7 @@ with st.sidebar:
     st.markdown("---")
     # build tag — bump when pushing significant changes; confirms which version
     # a deployed instance is running (hosted apps can lag behind the repo)
-    st.caption("build: **v3.0 — Enterprise: Custom Duty bill entry + per-month Operational Cost overrides**")
+    st.caption("build: **v3.0.1 — Custom Duty rows shaped like the manual report (no Shipment ID, FY-Total Purchases)**")
     status = db.all_db_status()
     loaded = [s for s, v in status.items() if v["exists"]]
     st.caption(f"{len(loaded)} / {len(status)} sheets loaded")
@@ -1305,13 +1305,13 @@ elif page == "Summary Report":
         #    summary row. Both persist until edited again.
         _cd_store = db.load_custom_duty()
         with st.expander(f"🛃 Enterprise — Custom Duty bills ({len(_cd_store)} stored)"):
-            st.caption("Shipments with **no bill/invoice in Zoho**, added manually as "
-                       "purchases. Each row lands in the Enterprise profitability in the "
+            st.caption("Custom-duty line items — **no bill/invoice in Zoho and no Shipment "
+                       "ID**, added manually as purchases (they also count in the FY-Total "
+                       "Purchases). Each row lands in the Enterprise profitability in the "
                        "selected month and **stays stored** until edited here. "
                        "Month format: `Jul-26`.")
             _cd_seed = _cd_store if not _cd_store.empty else pd.DataFrame(
-                {"Shipment ID": pd.Series(dtype="str"),
-                 "Month (mmm-yy)": pd.Series(dtype="str"),
+                {"Month (mmm-yy)": pd.Series(dtype="str"),
                  "Supplier Name": pd.Series(dtype="str"),
                  "Amount": pd.Series(dtype="float")})
             _cd_res = st.data_editor(_cd_seed, num_rows="dynamic",

@@ -289,17 +289,16 @@ def _load_small(path) -> pd.DataFrame:
 
 
 def save_custom_duty(df: pd.DataFrame) -> int:
-    """Full snapshot — replaces. Keeps only rows with a shipment id, a parseable
-    mmm-yy month and a non-zero amount."""
+    """Full snapshot — replaces. Columns: Month (mmm-yy), Supplier Name, Amount.
+    Custom-duty line items carry NO shipment id (same as the manual report).
+    Keeps only rows with a parseable month and a non-zero amount."""
     if df is None:
         return 0
     d = df.copy()
     d.columns = [str(c) for c in d.columns]
-    ship = d.iloc[:, 0].astype(str).str.strip()
-    mon  = d.iloc[:, 1].astype(str).str.strip()
-    amt  = pd.to_numeric(d.iloc[:, 3] if d.shape[1] > 3 else d.iloc[:, -1], errors="coerce")
-    ok = ship.ne("") & ship.str.lower().ne("nan") \
-         & pd.to_datetime(mon, format="%b-%y", errors="coerce").notna() \
+    mon = d.iloc[:, 0].astype(str).str.strip()
+    amt = pd.to_numeric(d.iloc[:, -1], errors="coerce")
+    ok = pd.to_datetime(mon, format="%b-%y", errors="coerce").notna() \
          & amt.notna() & amt.ne(0)
     d = d[ok].reset_index(drop=True)
     return _save_small(d, CUSTOM_DUTY_PATH)

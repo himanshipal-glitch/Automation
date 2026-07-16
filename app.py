@@ -216,8 +216,8 @@ with st.container(key="rkheader"):
         loaded = [s for s, v in status.items() if v["exists"]]
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
-        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.0.5"):
-            st.caption("build: **v3.0.5 — Details sheet (renamed), Finance Up Charge table, Custom Duty material/vendor, black table borders**")
+        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.0.6"):
+            st.caption("build: **v3.0.6 — Finance Up Charge table = only 'Finance Up-Charge' invoice items; all other lines stay in the main Details table**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())

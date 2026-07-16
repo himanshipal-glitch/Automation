@@ -1626,19 +1626,21 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
             _rep = pd.concat([_rep[~_is_orphan], _rep[_is_orphan]], ignore_index=True)
 
         # Finance Up Charge rows → their OWN table below the main Details table
-        # (matches the manual layout). Identified by the verified Remarks class.
-        # Pulled from the SOURCE rows, not the tab split: IB's finance charges
-        # carry no Shipment ID, so the B2B/warehouse split drops them from the
-        # Enterprise tab — the manual still lists them there.
-        def _rmk_of(df):
+        # (matches the manual layout). ONLY rows whose invoice ITEM name is
+        # 'Finance Up-Charge' — other charge lines (processing/handling/hydra…)
+        # stay in the main table. Pulled from the SOURCE rows, not the tab
+        # split: these lines carry no Shipment ID, so the IB B2B/warehouse
+        # split would drop them from the Enterprise tab.
+        def _fu_of(df):
             c = next((c for c in df.columns
-                      if "".join(ch for ch in str(c).lower() if ch.isalnum()) == "remarks"), None)
+                      if "".join(ch for ch in str(c).lower() if ch.isalnum()) == "material"), None)
             if c is None:
                 return pd.Series(False, index=df.index)
-            return df[c].astype(str).str.strip().str.lower().eq("finance up charge")
+            m = df[c].astype(str).str.lower().str.replace(r"[^a-z]", "", regex=True)
+            return m.str.startswith("financeup")
 
-        _main = _rep[~_rmk_of(_rep)]                       # keep them out of the main table
-        _fu = _live_src[_rmk_of(_live_src)]
+        _main = _rep[~_fu_of(_rep)]                        # keep them out of the main table
+        _fu = _live_src[_fu_of(_live_src)]
         if len(_fu) and vertical:
             _vkey = "".join(ch for ch in str(vertical).lower() if ch.isalnum())
             _fcat = _fu.iloc[:, 85].astype(str)
@@ -1661,7 +1663,7 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
         if len(_fu):
             # 2 blank rows · title · repeated column header · the FU rows
             _fu_title = 2 + len(_main) + 3                     # 1-indexed excel row
-            pd.DataFrame([["FINANCE UP CHARGE — non-material charge lines (blank Shipment ID)"]]) \
+            pd.DataFrame([["FINANCE UP CHARGE — invoice line items named 'Finance Up-Charge'"]]) \
                 .to_excel(w, sheet_name="Details", startrow=_fu_title - 1, startcol=0,
                           index=False, header=False)
             _fu.to_excel(w, sheet_name="Details", index=False, startrow=_fu_title)

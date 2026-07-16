@@ -324,6 +324,18 @@ def _keeps_mp(cat: pd.Series) -> pd.Series:
     return cat.str.contains(_MP_KEEP_RE, case=False, na=False)
 
 
+# Recykal renamed the "Metal" vertical to "End Generator". The Zoho export (and
+# older accumulated rows) may still carry the OLD name in Broad Category —
+# detection keeps matching both, but every user-facing label (report tabs,
+# workbook sheets, emails) shows the new name.
+_LABEL_CANON = {"metal": "End Generator"}
+
+
+def _canon_label(c):
+    key = "".join(ch for ch in str(c).lower() if ch.isalnum())
+    return _LABEL_CANON.get(key, c)
+
+
 def _is_samsung(df: pd.DataFrame) -> pd.Series:
     """Per-row: is this a Samsung shipment? Detected by 'samsung' appearing in the
     Supplier Name (col 4) or Buyer Name (col 41). Used to route NEW (post-manual)
@@ -331,6 +343,48 @@ def _is_samsung(df: pd.DataFrame) -> pd.Series:
     def _c(i):
         return df.iloc[:, i].astype(str) if df.shape[1] > i else pd.Series("", index=df.index)
     return (_c(4) + " " + _c(41)).str.lower().str.contains("samsung", na=False)
+
+
+def _schema_cores(cols) -> list[str]:
+    """Normalized 'core' key per column, so the SAME column matches across the
+    three name spellings in play: raw engine ('Qty(Kg)', 'Qty(Kg).1'), session-
+    sanitized ('QtyKg', 'QtyKg1'), and the manual file's own ('Qty (Kg)').
+    A '.N' uniquify suffix is stripped; a bare trailing-digit variant collapses
+    onto an earlier identical core (sanitize strips the dot from '.1'), so
+    'qtykg1' after 'qtykg' reads as occurrence #2 — while genuinely-numbered
+    names like 'Credit Note No:1' (no unnumbered sibling) keep their digit."""
+    import re as _re2
+    seen, out = set(), []
+    for c in cols:
+        k = "".join(ch for ch in _re2.sub(r"\.\d+$", "", str(c)).lower() if ch.isalnum())
+        m = _re2.match(r"^(.*?)\d+$", k)
+        if k not in seen and m and m.group(1) in seen:
+            k = m.group(1)
+        seen.add(k)
+        out.append(k)
+    return out
+
+
+def _align_to_schema(dfm: pd.DataFrame, tgt_cols) -> pd.DataFrame:
+    """Reindex `dfm` onto `tgt_cols` matching by normalized core name instead of
+    exact spelling (the session store sanitizes names — 'Shipment ID' vs
+    'Shipment_ID' — which made an exact reindex NaN every column and broke the
+    Re-Commerce dedup). Duplicate cores pair up by occurrence order on both
+    sides. Unmatched target columns stay NaN; unmatched source columns drop."""
+    tgt_cols = list(tgt_cols)
+    src_cores, tgt_cores = _schema_cores(dfm.columns), _schema_cores(tgt_cols)
+    slots: dict[str, list[int]] = {}
+    for j, k in enumerate(tgt_cores):
+        slots.setdefault(k, []).append(j)
+    out = pd.DataFrame(index=dfm.index, columns=pd.Index(tgt_cols), dtype=object)
+    used: dict[str, int] = {}
+    for i, k in enumerate(src_cores):
+        occ = used.get(k, 0)
+        cand = slots.get(k, [])
+        if occ < len(cand):
+            out.isetitem(cand[occ], dfm.iloc[:, i].values)
+        used[k] = occ + 1
+    return out
 
 
 def apply_recommerce_manual(base_df: pd.DataFrame,
@@ -350,7 +404,10 @@ def apply_recommerce_manual(base_df: pd.DataFrame,
     85 = Broad Category."""
     if manual_df is None or getattr(manual_df, "empty", True):
         return base_df
-    m = manual_df.reindex(columns=base_df.columns).copy()      # align to engine schema
+    m = _align_to_schema(manual_df, base_df.columns)   # align by NORMALIZED name —
+    # the session store sanitizes column names ('Shipment ID' → 'Shipment_ID');
+    # an exact-name reindex NaN'd every manual column there, so the known-ship
+    # dedup saw nothing and the live RC rows doubled the manual's sales.
     # provenance: manual rows are the signed-off fixed report — mark them so they
     # don't read as missing-bill Reco candidates
     _csc = next((c for c in m.columns
@@ -453,7 +510,7 @@ def split_by_category(profit_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
             return profit_df[norm[k]].astype(str).str.strip()
         return profit_df.iloc[:, pos].astype(str).str.strip()
 
-    cat  = _col("Broad Category", 85)
+    cat  = _col("Broad Category", 85).map(_canon_label)   # "Metal" → "End Generator"
     ship = _col("Shipment ID", 3)
 
     out: dict[str, pd.DataFrame] = {}
@@ -844,7 +901,7 @@ def _inv_tab_map(profit_df: pd.DataFrame) -> dict:
         elif _re.sub(r"^\d+/", "", sh).startswith("MP") and "re-commerce" not in c.lower():
             lab = "Warehouse (MP)"
         else:
-            lab = c if c and c.lower() != "nan" else ""
+            lab = _canon_label(c) if c and c.lower() != "nan" else ""
         m[iv] = lab
     return m
 
@@ -926,7 +983,8 @@ def summaries_by_category(profit_df: pd.DataFrame,
     main_df = profit_df[~exclude]
     mp_df   = profit_df[exclude]
 
-    cat  = main_df.iloc[:, 85].astype(str).str.strip()        # Broad Category
+    cat  = (main_df.iloc[:, 85].astype(str).str.strip()       # Broad Category
+            .map(_canon_label))                               # "Metal" → "End Generator"
     ship = main_df.iloc[:, 3].astype(str).str.strip()
 
     # Attribute receivables to each vertical (per-vertical DSO). Payables (AP)
@@ -959,7 +1017,8 @@ def summaries_by_category(profit_df: pd.DataFrame,
         # their own receivable split (the Enterprise sheet's B2B figure is a specific
         # subset, not the whole-IB net) — until that rule is cracked, IB keeps its
         # prior per-month balance rather than a wrong override.
-        alias = {"metal": "End Generator", "plastic": "Plastic", "rewerse": "ReWerse",
+        alias = {"metal": "End Generator", "endgenerator": "End Generator",
+                 "plastic": "Plastic", "rewerse": "ReWerse",
                  "recommerce": "Re-Commerce", "itad": "ITAD", "itassetsdisposition": "ITAD",
                  "afr": "AFR", "m4": "M4"}
         return _net_by_v.get(alias.get(key))
@@ -979,7 +1038,8 @@ def summaries_by_category(profit_df: pd.DataFrame,
 
     def _ap_sub(tab: str):
         t = "".join(ch for ch in str(tab).lower() if ch.isalnum())
-        return {"metal": "metal waste", "plastic": "plastic waste", "recommerce": "re-commerce",
+        return {"metal": "metal waste", "endgenerator": "metal waste",
+                "plastic": "plastic waste", "recommerce": "re-commerce",
                 "itad": "it assets", "itassetsdisposition": "it assets",
                 "afr": "(afr)", "m4": "(m4)", "enterprise": "institutional",
                 "processingcenter": "institutional"}.get(t)
@@ -1071,7 +1131,7 @@ def top_materials(profit_df: pd.DataFrame, tab: str, n: int = 5):
     is_mp = _is_mp_ship(ship)
     w = w[~(is_mp & ~_keeps_mp(cat))]
     ship = w["Shipment_ID"].astype(str).str.strip().str.upper()
-    cat  = w["Broad_Category"].astype(str)
+    cat  = w["Broad_Category"].astype(str).map(_canon_label)
 
     key = "".join(ch for ch in str(tab).lower() if ch.isalnum())
     if key in ("enterprise", "processingcenter"):
@@ -1301,7 +1361,8 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
             summ, det = rb["summary"], rb["detail"]
             if vertical:
                 vn = "".join(c for c in vertical.lower() if c.isalnum())
-                alias = {"metal": "End Generator", "plastic": "Plastic", "rewerse": "ReWerse",
+                alias = {"metal": "End Generator", "endgenerator": "End Generator",
+                         "plastic": "Plastic", "rewerse": "ReWerse",
                          "recommerce": "Re-Commerce", "itad": "ITAD", "afr": "AFR", "m4": "M4",
                          "enterprise": "IB", "institutionalbusiness": "IB"}.get(vn, vertical)
                 summ = summ[summ["Vertical"].astype(str) == alias]
@@ -1356,7 +1417,8 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
                       "balance_fcy", "amount_fcy", "exchange_rate") and c != _bc]
             ap = ap.drop(columns=_junk, errors="ignore")
             if vertical and _vc:
-                sub = {"metal": "metal waste", "plastic": "plastic waste", "recommerce": "re-commerce",
+                sub = {"metal": "metal waste", "endgenerator": "metal waste",
+                       "plastic": "plastic waste", "recommerce": "re-commerce",
                        "itad": "it assets", "afr": "(afr)", "m4": "(m4)", "enterprise": "institutional"}.get(
                        "".join(c for c in vertical.lower() if c.isalnum()))
                 if sub:
@@ -1394,6 +1456,16 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
             _live_src = profit_df.copy()
             if _dbm is not None:      # de-duplicate repeated column names
                 _live_src.columns = _dbm._uniq_cols(_live_src.columns)
+        # Enterprise Custom Duty bills: the accumulated store is written at
+        # upload time — BEFORE the Summary page injects them — so they must be
+        # injected here too, or the sheet wouldn't carry the line items the
+        # FY-Total Purchases already counts.
+        try:
+            _cds = _dbm.load_custom_duty() if _dbm is not None else None
+        except Exception:
+            _cds = None
+        if _cds is not None and len(_cds) and not _custom_duty_mask(_live_src).any():
+            _live_src = inject_custom_duty(_live_src, _cds)
         _tgt = list(_live_src.columns)
 
         def _nrm(s):
@@ -1501,6 +1573,11 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
             if len(_reco):
                 _reco.to_excel(w, sheet_name="Reco Items", index=False)
                 _headers.append(("Reco Items", 1))
+
+        # Display rename in the sheet itself: old accumulated rows may still say
+        # "Metal" in Broad Category — show the current vertical name.
+        if "Broad Category" in _rep.columns:
+            _rep["Broad Category"] = _rep["Broad Category"].map(_canon_label)
 
         # Move orphan shipments (Service Charges, etc. with blank Shipment ID) to the bottom
         if "Shipment ID" in _rep.columns:

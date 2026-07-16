@@ -247,7 +247,7 @@ _components.html(
 
   // vertical tab labels → clean display name; matched on a punctuation-stripped key
   // ("IT AD"→"itad", "IB(B2B)"→"ibb2b") so spaces/brackets don't make the match miss.
-  const VERTS=[['endgenerator','END GENERATOR'],['metal','METAL'],['plastic','PLASTIC'],
+  const VERTS=[['endgenerator','END GENERATOR'],['metal','END GENERATOR'],['plastic','PLASTIC'],
     ['recommerce','RE-COMMERCE'],['itad','IT AD'],['afr','AFR'],['m4','M4'],
     ['ibb2b','ENTERPRISE'],['ibwarehouse','PROCESSING CENTER'],['enterprise','ENTERPRISE'],
     ['rewerse','REWERSE']];

@@ -87,7 +87,7 @@ They appear in a separate "Warehouse (MP)" detail report.
 
 ACCUMULATED DETAILS: every MIS upload's computed line rows are stored permanently
 (persistent store, upserted by shipment+invoice) — so months that drop out of
-Zoho's rolling export stay in the Profitability Report sheet, and a late CN/DN
+Zoho's rolling export stay in the Details sheet, and a late CN/DN
 that reappears with its shipment replaces the old row with the newest state.
 
 DOWNLOADS: each vertical (and "All") downloads as ONE Excel with 4 sheets —

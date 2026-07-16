@@ -216,8 +216,8 @@ with st.container(key="rkheader"):
         loaded = [s for s, v in status.items() if v["exists"]]
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
-        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.0.4"):
-            st.caption("build: **v3.0.4 — recykal.market design language, capsule top nav (no logic changes)**")
+        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.0.5"):
+            st.caption("build: **v3.0.5 — Details sheet (renamed), Finance Up Charge table, Custom Duty material/vendor, black table borders**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())
@@ -794,7 +794,7 @@ if page == "Upload Files":
         st.caption(
             "Every MIS upload's computed line rows are stored here permanently, "
             "upserted by Shipment + Invoice — so months that drop out of Zoho's "
-            "rolling export stay in the Profitability Report sheet, and late CN/DN "
+            "rolling export stay in the Details sheet, and late CN/DN "
             "updates replace a shipment's old rows with the newest state."
         )
         if _pd_count and st.button("🗑️ Clear accumulated details", key="clear_pdet"):

@@ -117,6 +117,7 @@ def _ib_warehouse_set() -> set:
 
 
 CUSTOM_DUTY_COST_SOURCE = "Custom Duty (manual entry)"
+CUSTOM_DUTY_VENDOR = "BLACK GOLD RECYCLING PRIVATE LIMITED"
 
 
 def _custom_duty_mask(df: pd.DataFrame) -> pd.Series:
@@ -168,9 +169,14 @@ def inject_custom_duty(profit_df: pd.DataFrame, cd: pd.DataFrame) -> pd.DataFram
         r[profit_df.columns[1]]  = dt.strftime("%B")             # Month
         r[profit_df.columns[2]]  = dt.strftime("%Y-%m-%d")       # Date (1st of month)
         r[profit_df.columns[3]]  = ""                            # NO Shipment ID
-        _sup = str(cd.iloc[i, 1]).strip() if cd.shape[1] > 2 else "Customs duty"
+        # Vendor: the manual report books these bills under Black Gold — a
+        # generic/blank supplier entry ("customs duty" etc.) displays that name;
+        # a real vendor typed by the user is kept as-is.
+        _sup = str(cd.iloc[i, 1]).strip() if cd.shape[1] > 2 else ""
+        if not _sup or "custom" in _sup.lower() or "duty" in _sup.lower():
+            _sup = CUSTOM_DUTY_VENDOR
         if profit_df.shape[1] > 4:
-            r[profit_df.columns[4]] = _sup or "Customs duty"     # Supplier / Vendor Name
+            r[profit_df.columns[4]] = _sup                       # Supplier / Vendor Name
         r[profit_df.columns[85]] = "Institutional Business"      # → Enterprise (forced B2B)
         amt = float(pd.to_numeric(pd.Series([cd.iloc[i, -1]]),
                                   errors="coerce").fillna(0).iloc[0])
@@ -182,8 +188,11 @@ def inject_custom_duty(profit_df: pd.DataFrame, cd: pd.DataFrame) -> pd.DataFram
             return next((c for c in profit_df.columns
                          if "".join(ch for ch in str(c).lower() if ch.isalnum()) == key), None)
         _pp, _cs, _rn = _named("Purchase Price"), _named("Cost Source"), _named("Resale Note")
+        _mt = _named("Material")
         if _pp is not None:
             r[_pp] = amt
+        if _mt is not None:
+            r[_mt] = "Custom Duty"                               # material, like the manual
         if _cs is not None:
             r[_cs] = CUSTOM_DUTY_COST_SOURCE
         if _rn is not None:
@@ -1297,6 +1306,30 @@ def _style_workbook(raw: bytes, headers: list[tuple[str, int]],
                     if _is_num(cell.value):
                         cell.number_format = fmt
 
+    # ── black grid borders on EVERY table (matches the manual workbooks) ──────
+    # Each table = its header row down to the first fully-blank row (or the row
+    # before the next table's header), across the header's populated columns.
+    _thin = Side(style="thin", color="000000")
+    _grid = Border(left=_thin, right=_thin, top=_thin, bottom=_thin)
+    all_tables: dict[str, list[int]] = {}
+    for sheet, r in headers:                     # Summary included this time
+        all_tables.setdefault(sheet, []).append(r)
+    for sheet, hdr_rows in all_tables.items():
+        if sheet not in wb.sheetnames:
+            continue
+        ws = wb[sheet]
+        hdr_rows = sorted(set(hdr_rows))
+        for i, hr in enumerate(hdr_rows):
+            end = (hdr_rows[i + 1] - 2) if i + 1 < len(hdr_rows) else ws.max_row
+            for rr in range(hr + 1, end + 1):
+                if all(c.value is None for c in ws[rr]):
+                    end = rr - 1
+                    break
+            width = max((c.column for c in ws[hr] if c.value is not None), default=0)
+            for rr in range(hr, end + 1):
+                for cc in range(1, width + 1):
+                    ws.cell(row=rr, column=cc).border = _grid
+
     # auto-fit column widths (openpyxl has no native autofit — size from content)
     for ws in wb.worksheets:
         widths: dict[int, int] = {}
@@ -1333,8 +1366,8 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
                       vertical: str | None = None,
                       reco_ships: set | None = None) -> bytes:
     """One Excel with four stacked sheets — Summary, Receivables, Payables,
-    Profitability Report. If `vertical` is given, everything is filtered to it;
-    otherwise all verticals are included (stacked by type)."""
+    Details (the profitability report). If `vertical` is given, everything is
+    filtered to it; otherwise all verticals are included (stacked by type)."""
     import io as _io
     import receivables as _recv
 
@@ -1444,7 +1477,7 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
                 ap.to_excel(w, sheet_name="Payables", index=False)
                 _headers.append(("Payables", 1))
 
-        # ── Sheet 4: Profitability Report — whole FY, ONE uniform schema ─────
+        # ── Sheet 4: Details (the profitability report) — whole FY, ONE schema ──
         # Every row (frozen months from the manual files' Details + live months
         # from the accumulated store) is aligned to the ENGINE's column set, so
         # the sheet is a single auditable table: filter by Month, sum any column,
@@ -1572,7 +1605,7 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
             _rep = _live_src.copy()
             _rep["Row Source"] = "Live (MIS)"
 
-        # ITAD missing-bill rows → pulled out of the Profitability Report onto
+        # ITAD missing-bill rows → pulled out of the Details sheet onto
         # their own 'Reco Items' sheet (they're also excluded from the summary).
         if len(_rep):
             _reco_mask = _reco_exclusion_mask(_rep, reco_ships)
@@ -1592,14 +1625,51 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
             _is_orphan = _rep["Shipment ID"].astype(str).str.strip().isin(["", "nan", "None", "NaT"])
             _rep = pd.concat([_rep[~_is_orphan], _rep[_is_orphan]], ignore_index=True)
 
-        _rep.to_excel(w, sheet_name="Profitability Report", index=False,
-                      startrow=1)   # row 1 reserved for the colored group header
-        _add_group_header(w.sheets["Profitability Report"], list(_rep.columns))
-        _headers.append(("Profitability Report", 2))   # column header, shifted by the group row
+        # Finance Up Charge rows → their OWN table below the main Details table
+        # (matches the manual layout). Identified by the verified Remarks class.
+        # Pulled from the SOURCE rows, not the tab split: IB's finance charges
+        # carry no Shipment ID, so the B2B/warehouse split drops them from the
+        # Enterprise tab — the manual still lists them there.
+        def _rmk_of(df):
+            c = next((c for c in df.columns
+                      if "".join(ch for ch in str(c).lower() if ch.isalnum()) == "remarks"), None)
+            if c is None:
+                return pd.Series(False, index=df.index)
+            return df[c].astype(str).str.strip().str.lower().eq("finance up charge")
+
+        _main = _rep[~_rmk_of(_rep)]                       # keep them out of the main table
+        _fu = _live_src[_rmk_of(_live_src)]
+        if len(_fu) and vertical:
+            _vkey = "".join(ch for ch in str(vertical).lower() if ch.isalnum())
+            _fcat = _fu.iloc[:, 85].astype(str)
+            if _vkey in ("enterprise", "processingcenter"):
+                _fu = _fu[_fcat.str.strip().str.lower().str.replace(" ", "").str.startswith("institutional")]
+            else:
+                _fu = _fu[_fcat.map(_canon_label).map(
+                    lambda c: "".join(ch for ch in str(c).lower() if ch.isalnum())) == _vkey]
+        if len(_fu):
+            _fu = _fu.reindex(columns=_tgt).copy()
+            if "Broad Category" in _fu.columns:
+                _fu["Broad Category"] = _fu["Broad Category"].map(_canon_label)
+            _fu["Row Source"] = "Live (MIS)"
+            _fu = _fu.reindex(columns=list(_main.columns))
+
+        _main.to_excel(w, sheet_name="Details", index=False,
+                       startrow=1)   # row 1 reserved for the colored group header
+        _add_group_header(w.sheets["Details"], list(_main.columns))
+        _headers.append(("Details", 2))   # column header, shifted by the group row
+        if len(_fu):
+            # 2 blank rows · title · repeated column header · the FU rows
+            _fu_title = 2 + len(_main) + 3                     # 1-indexed excel row
+            pd.DataFrame([["FINANCE UP CHARGE — non-material charge lines (blank Shipment ID)"]]) \
+                .to_excel(w, sheet_name="Details", startrow=_fu_title - 1, startcol=0,
+                          index=False, header=False)
+            _fu.to_excel(w, sheet_name="Details", index=False, startrow=_fu_title)
+            _headers.append(("Details", _fu_title + 1))
 
         # ── Sheets 5 & 6: Supplier / Buyer metrics — computed over the SAME
-        # whole-FY rows as the Profitability Report sheet, so party totals
-        # reconcile against it. Includes each party's GSTIN + materials dealt.
+        # whole-FY rows as the Details sheet (main + Finance Up Charge), so
+        # party totals reconcile against it. Includes GSTIN + materials dealt.
         try:
             _mrep = _rep.drop(columns=["Row Source"], errors="ignore")
             supplier_summary(_mrep).to_excel(w, sheet_name="Supplier Metrics", index=False)
@@ -1809,7 +1879,7 @@ def _style_workbook_simple(wb) -> None:
                 if isinstance(val, str) and val.strip().startswith("■"):
                     if row_idx + 1 <= ws.max_row:
                         header_rows.add(row_idx + 1)
-        elif ws.title == "Profitability Report":
+        elif ws.title in ("Profitability Report", "Details"):
             # Group header is row 1 (styled separately by _add_group_header).
             # Column headers are in row 2.
             header_rows.add(2)

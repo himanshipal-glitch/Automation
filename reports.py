@@ -174,12 +174,20 @@ def inject_custom_duty(profit_df: pd.DataFrame, cd: pd.DataFrame) -> pd.DataFram
         r[profit_df.columns[85]] = "Institutional Business"      # → Enterprise (forced B2B)
         amt = float(pd.to_numeric(pd.Series([cd.iloc[i, -1]]),
                                   errors="coerce").fillna(0).iloc[0])
-        if "Purchase Price" in profit_df.columns:
-            r["Purchase Price"] = amt
-        if "Cost Source" in profit_df.columns:
-            r["Cost Source"] = CUSTOM_DUTY_COST_SOURCE
-        if "Resale Note" in profit_df.columns:
-            r["Resale Note"] = "Custom Duty bill — manual purchase, no invoice/bill in Zoho"
+        # normalized lookup — the session store sanitizes names ('Purchase Price'
+        # → 'Purchase_Price'); an exact-name check silently skipped the amount
+        # and the Cost Source marker there, so the summary never saw the bill.
+        def _named(name):
+            key = "".join(ch for ch in name.lower() if ch.isalnum())
+            return next((c for c in profit_df.columns
+                         if "".join(ch for ch in str(c).lower() if ch.isalnum()) == key), None)
+        _pp, _cs, _rn = _named("Purchase Price"), _named("Cost Source"), _named("Resale Note")
+        if _pp is not None:
+            r[_pp] = amt
+        if _cs is not None:
+            r[_cs] = CUSTOM_DUTY_COST_SOURCE
+        if _rn is not None:
+            r[_rn] = "Custom Duty bill — manual purchase, no invoice/bill in Zoho"
         rows.append(r)
     if not rows:
         return profit_df

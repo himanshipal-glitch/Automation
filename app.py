@@ -15,106 +15,213 @@ st.set_page_config(
     page_title="Zoho Data Pipeline",
     page_icon="📊",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
-# ── Visual theme (Recykal) — presentation only, no content/logic ──────────────
+# ── Visual theme (Recykal — recykal.market design language) — presentation only ─
+# Bricolage Grotesque display headings · Geist UI text · Kode Mono meta labels ·
+# warm blacks (#16160F) on warm paper (#FAFAFA/#F2F2EE) · black pill CTAs ·
+# one green whisper (#1B8B3A). No content or logic in here.
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700&family=Geist:wght@400;500;600;700&family=Kode+Mono:wght@400;500;600&display=swap');
 
 :root{
-  --rk-green:#10b981; --rk-green-d:#047857; --rk-green-dd:#064e3b;
-  --rk-green-l:#d1fae5; --rk-ink:#0f2e26; --rk-card:#ffffff; --rk-line:#e2f3ec;
+  --ink:#16160F;            /* warm black — text, fills            */
+  --ink-soft:#3D3D36;
+  --grey:#6F6F66;           /* warm secondary text                 */
+  --paper:#FAFAFA;          /* page                                */
+  --paper-2:#F2F2EE;        /* warm surfaces                       */
+  --paper-3:#ECEBE8;        /* capsule / deep surfaces             */
+  --hair:rgba(22,22,15,.12);
+  --hair-soft:rgba(22,22,15,.07);
+  --green:#1B8B3A;          /* the one accent — meta labels, live dots */
+  --shadow-s:0 1px 2px rgba(22,22,15,.05), 0 3px 6px -2px rgba(22,22,15,.05);
+  --shadow-m:0 2px 4px rgba(22,22,15,.04), 0 12px 24px -8px rgba(22,22,15,.10);
+  --shadow-l:0 4px 8px rgba(22,22,15,.05), 0 25px 42px -12px rgba(22,22,15,.16);
+  --ease:cubic-bezier(.22,.9,.28,1);
 }
-html, body, [class*="css"], .stApp{ font-family:'Inter', system-ui, sans-serif; }
 
-/* page fade-in + comfortable width */
-.main .block-container{ animation:rkFade .55s cubic-bezier(.21,.61,.35,1) both;
-  padding-top:2.2rem; max-width:1440px; }
-@keyframes rkFade{ from{opacity:0; transform:translateY(14px);} to{opacity:1; transform:none;} }
-
-[data-testid="stHeader"]{ background:transparent; backdrop-filter:blur(6px); }
-
-/* ── sidebar: deep-green gradient ── */
-[data-testid="stSidebar"]{
-  background:linear-gradient(180deg,var(--rk-green-dd) 0%,#065f46 55%,var(--rk-green-d) 100%);
-  border-right:0;
+html, body, [class*="css"], .stApp{
+  font-family:'Geist', -apple-system, system-ui, sans-serif;
+  -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+  color:var(--ink);
 }
-[data-testid="stSidebar"] *{ color:#ecfdf5 !important; }
-[data-testid="stSidebar"] [role="radiogroup"] label{
-  border-radius:10px; padding:.5rem .7rem; margin:3px 0; transition:.18s ease; cursor:pointer;
+.stApp{
+  background-color:var(--paper);
+  background-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20width%3D'560'%20height%3D'560'%20viewBox%3D'0%200%20560%20560'%3E%3Cg%20fill%3D'none'%20stroke%3D'%2316160F'%20stroke-opacity%3D'.055'%20stroke-width%3D'2'%20stroke-linecap%3D'round'%20stroke-linejoin%3D'round'%3E%3C!--%20PET%20bottle%20--%3E%3Cg%20transform%3D'translate(60%2052)%20rotate(-14)'%3E%3Crect%20x%3D'7'%20y%3D'0'%20width%3D'12'%20height%3D'6'%20rx%3D'2'%2F%3E%3Cpath%20d%3D'M9%206%20v5%20c0%205%20-7%207%20-7%2014%20v32%20a6%206%200%200%200%206%206%20h10%20a6%206%200%200%200%206%20-6%20V25%20c0%20-7%20-7%20-9%20-7%20-14%20V6'%2F%3E%3Cpath%20d%3D'M4%2034%20h18%20M4%2048%20h18'%2F%3E%3C%2Fg%3E%3C!--%20recycle%20arrows%20triangle%20--%3E%3Cg%20transform%3D'translate(400%2084)%20rotate(9)'%3E%3Cpath%20d%3D'M0%2026%20L12%205%20l8%2013'%2F%3E%3Cpath%20d%3D'M14%202%20l-2%2010%2010%20-1'%2F%3E%3Cpath%20d%3D'M20%2044%20h-24%20l7%20-12'%2F%3E%3Cpath%20d%3D'M-8%2040%20l9%205%20-4%20-10'%2F%3E%3Cpath%20d%3D'M28%2022%20l12%2021%20-14%201'%2F%3E%3Cpath%20d%3D'M44%2049%20l-9%20-5%203%2010'%2F%3E%3C%2Fg%3E%3C!--%20crushed%20can%20--%3E%3Cg%20transform%3D'translate(160%20260)%20rotate(7)'%3E%3Cellipse%20cx%3D'14'%20cy%3D'4'%20rx%3D'14'%20ry%3D'4.5'%2F%3E%3Cpath%20d%3D'M0%204%20c3%208%20-4%2012%201%2020%20c4%207%20-3%2010%201%2016%20a14%204.5%200%200%200%2026%200%20c3%20-7%20-2%20-10%201%20-16%20c4%20-8%20-2%20-12%20-1%20-20'%2F%3E%3Cpath%20d%3D'M9%202.5%20h10'%2F%3E%3C%2Fg%3E%3C!--%20leaf%20--%3E%3Cg%20transform%3D'translate(452%20300)%20rotate(-18)'%3E%3Cpath%20d%3D'M0%2040%20Q-2%206%2036%200%20Q40%2036%206%2042%20Q2%2042%200%2040%20Z'%2F%3E%3Cpath%20d%3D'M4%2038%20Q16%2024%2032%206'%2F%3E%3C%2Fg%3E%3C!--%20circuit%20chip%20(ITAD)%20--%3E%3Cg%20transform%3D'translate(272%20128)%20rotate(-5)'%3E%3Crect%20x%3D'0'%20y%3D'0'%20width%3D'30'%20height%3D'30'%20rx%3D'5'%2F%3E%3Crect%20x%3D'9'%20y%3D'9'%20width%3D'12'%20height%3D'12'%20rx%3D'2'%2F%3E%3Cpath%20d%3D'M5%20-6%20v6%20M15%20-6%20v6%20M25%20-6%20v6%20M5%2030%20v6%20M15%2030%20v6%20M25%2030%20v6%20M-6%205%20h6%20M-6%2015%20h6%20M-6%2025%20h6%20M30%205%20h6%20M30%2015%20h6%20M30%2025%20h6'%2F%3E%3C%2Fg%3E%3C!--%20battery%20--%3E%3Cg%20transform%3D'translate(84%20420)%20rotate(12)'%3E%3Crect%20x%3D'0'%20y%3D'4'%20width%3D'40'%20height%3D'20'%20rx%3D'4'%2F%3E%3Crect%20x%3D'40'%20y%3D'10'%20width%3D'5'%20height%3D'8'%20rx%3D'1.5'%2F%3E%3Cpath%20d%3D'M20%207%20l-6%208%20h7%20l-5%207'%2F%3E%3C%2Fg%3E%3C!--%20cardboard%20box%20--%3E%3Cg%20transform%3D'translate(330%20430)%20rotate(-8)'%3E%3Crect%20x%3D'0'%20y%3D'8'%20width%3D'34'%20height%3D'26'%20rx%3D'2'%2F%3E%3Cpath%20d%3D'M0%208%20L6%200%20h22%20l6%208%20M17%208%20V0'%2F%3E%3C%2Fg%3E%3C!--%20water%20drop%20--%3E%3Cg%20transform%3D'translate(500%20480)%20rotate(6)'%3E%3Cpath%20d%3D'M11%200%20C18%2010%2022%2015%2022%2021%20a11%2011%200%201%201%20-22%200%20C0%2015%204%2010%2011%200%20Z'%2F%3E%3C%2Fg%3E%3C!--%20gear%20--%3E%3Cg%20transform%3D'translate(40%20300)%20rotate(20)'%3E%3Ccircle%20cx%3D'14'%20cy%3D'14'%20r%3D'8'%2F%3E%3Ccircle%20cx%3D'14'%20cy%3D'14'%20r%3D'3'%2F%3E%3Cpath%20d%3D'M14%202%20v4%20M14%2022%20v4%20M2%2014%20h4%20M22%2014%20h4%20M5.5%205.5%20l2.8%202.8%20M19.7%2019.7%20l2.8%202.8%20M22.5%205.5%20l-2.8%202.8%20M8.3%2019.7%20l-2.8%202.8'%2F%3E%3C%2Fg%3E%3C!--%20newspaper%20%2F%20sheet%20--%3E%3Cg%20transform%3D'translate(220%20500)%20rotate(-10)'%3E%3Crect%20x%3D'0'%20y%3D'0'%20width%3D'30'%20height%3D'22'%20rx%3D'3'%2F%3E%3Cpath%20d%3D'M6%206%20h18%20M6%2011%20h18%20M6%2016%20h10'%2F%3E%3C%2Fg%3E%3C%2Fg%3E%3C%2Fsvg%3E");
+  background-size:560px 560px; background-attachment:fixed;
 }
-[data-testid="stSidebar"] [role="radiogroup"] label:hover{ background:rgba(255,255,255,.12); transform:translateX(3px); }
-/* logo sits in a clean white card on the green sidebar */
-[data-testid="stSidebar"] [data-testid="stImage"]{
-  background:#ffffff; border-radius:14px; padding:14px; margin:4px 0 6px;
-  box-shadow:0 4px 14px rgba(0,0,0,.18); }
-[data-testid="stSidebar"] [data-testid="stImage"] img{ border-radius:6px; }
+::selection{ background:var(--ink); color:var(--paper); }
+::-webkit-scrollbar{ width:10px; height:10px; }
+::-webkit-scrollbar-thumb{ background:#D6D5D0; border-radius:999px; border:2.5px solid var(--paper); }
+::-webkit-scrollbar-track{ background:transparent; }
 
-/* ── headings ── */
-h1{ font-weight:800; letter-spacing:-.025em;
-  background:linear-gradient(90deg,var(--rk-green-d),var(--rk-green));
-  -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; }
-h2,h3{ color:var(--rk-ink); font-weight:700; letter-spacing:-.02em; }
+/* page entrance — content settles like a sheet of paper */
+.main .block-container, .stMainBlockContainer{
+  animation:rkRise .6s var(--ease) both; padding-top:.6rem; max-width:1400px; }
+@keyframes rkRise{ from{opacity:0; transform:translateY(16px) scale(.995);} to{opacity:1; transform:none;} }
 
-/* ── metric cards ── */
+[data-testid="stHeader"]{ background:transparent; }
+
+/* ── sidebar retired — navigation lives in the top capsule bar ── */
+[data-testid="stSidebar"], [data-testid="collapsedControl"],
+[data-testid="stSidebarCollapsedControl"]{ display:none !important; }
+
+/* ═══ display type — Bricolage Grotesque, editorial and tight ═══ */
+h1{ font-family:'Bricolage Grotesque', 'Geist', sans-serif !important;
+    font-weight:600; font-size:2.4rem; letter-spacing:-.045em; line-height:1.08;
+    color:var(--ink); }
+[data-testid="stHeading"] h1, .stMainBlockContainer h1{ padding-top:.1rem; margin-bottom:.15rem; }
+[data-testid="stMarkdownContainer"] > p:first-child{ margin-top:.1rem; }
+h2{ font-family:'Bricolage Grotesque', 'Geist', sans-serif !important;
+    font-weight:600; letter-spacing:-.035em; color:var(--ink); }
+h3{ font-family:'Bricolage Grotesque', 'Geist', sans-serif !important;
+    font-weight:500; letter-spacing:-.025em; color:var(--ink); }
+p, li, label{ color:var(--ink-soft); }
+small, .stCaption, [data-testid="stCaptionContainer"]{ color:var(--grey) !important; }
+
+/* ═══ the top capsule nav — a segmented control on warm paper ═══ */
+div[role="radiogroup"][aria-label="Navigate"]{
+  display:flex; width:max-content; margin:0 auto; gap:2px;
+  background:var(--paper-3); border:1px solid var(--hair-soft);
+  border-radius:999px; padding:5px; flex-wrap:nowrap;
+  box-shadow:inset 0 1px 2px rgba(22,22,15,.05);
+}
+div[role="radiogroup"][aria-label="Navigate"] label{
+  margin:0 !important; padding:8px 19px; border-radius:999px; cursor:pointer;
+  transition:background .3s var(--ease), box-shadow .3s var(--ease), transform .15s var(--ease);
+  white-space:nowrap; position:relative;
+}
+div[role="radiogroup"][aria-label="Navigate"] label > div:first-child{ display:none; } /* radio dot */
+div[role="radiogroup"][aria-label="Navigate"] label p{
+  font-family:'Geist', sans-serif; font-weight:600; font-size:.855rem;
+  letter-spacing:-.005em; color:var(--grey); transition:color .25s var(--ease); }
+div[role="radiogroup"][aria-label="Navigate"] label:hover p{ color:var(--ink); }
+div[role="radiogroup"][aria-label="Navigate"] label:active{ transform:scale(.97); }
+div[role="radiogroup"][aria-label="Navigate"] label:has(input:checked){
+  background:var(--ink); box-shadow:0 2px 6px rgba(22,22,15,.28), 0 8px 18px -6px rgba(22,22,15,.30); }
+div[role="radiogroup"][aria-label="Navigate"] label:has(input:checked) p{ color:#fff !important; }
+
+/* header block — logo & meta chip */
+.st-key-rkheader{ padding:2px 0 10px; border-bottom:1px solid var(--hair-soft); margin-bottom:.7rem; }
+.st-key-rkheader [data-testid="stImage"] img{ border-radius:14px;
+  box-shadow:var(--shadow-s); image-rendering:auto; }
+/* the status chip: a quiet mono meta label with the green whisper */
+.st-key-rkheader [data-testid="stExpander"]{
+  border:1px solid var(--hair-soft); border-radius:999px; background:var(--paper-2);
+  box-shadow:none; overflow:hidden; }
+.st-key-rkheader [data-testid="stExpander"] summary{ padding:.35rem .9rem; min-height:0; }
+.st-key-rkheader [data-testid="stExpander"] summary p{
+  font-family:'Kode Mono', monospace; font-size:.68rem; font-weight:600;
+  text-transform:uppercase; letter-spacing:.06em; color:var(--green); }
+.st-key-rkheader [data-testid="stExpander"] summary:hover p{ color:var(--ink); }
+
+/* ═══ metric cards — white paper, Bricolage numerals ═══ */
 [data-testid="stMetric"]{
-  background:var(--rk-card); border:1px solid var(--rk-line); border-radius:16px;
-  padding:1rem 1.15rem; box-shadow:0 2px 10px rgba(6,78,59,.06);
-  transition:transform .2s ease, box-shadow .2s ease; animation:rkFade .5s ease both;
+  background:#fff; border:1px solid var(--hair-soft); border-radius:20px;
+  padding:1.05rem 1.25rem; box-shadow:var(--shadow-s);
+  transition:transform .35s var(--ease), box-shadow .35s var(--ease);
+  animation:rkRise .55s var(--ease) both;
 }
-[data-testid="stMetric"]:hover{ transform:translateY(-3px); box-shadow:0 12px 26px rgba(6,78,59,.13); }
-[data-testid="stMetricValue"]{ color:var(--rk-green-d); font-weight:800; }
-[data-testid="stMetricLabel"]{ color:#5b7a70; font-weight:600; }
+[data-testid="stMetric"]:hover{ transform:translateY(-3px); box-shadow:var(--shadow-m); }
+[data-testid="stMetricValue"]{
+  font-family:'Bricolage Grotesque', sans-serif; font-weight:600;
+  letter-spacing:-.03em; color:var(--ink); }
+[data-testid="stMetricLabel"]{
+  font-family:'Geist', sans-serif; font-weight:600; font-size:.72rem;
+  text-transform:uppercase; letter-spacing:.07em; color:var(--grey); }
 
-/* ── tabs ── */
-.stTabs [data-baseweb="tab-list"]{ gap:6px; border-bottom:1px solid var(--rk-line); }
-.stTabs [data-baseweb="tab"]{ border-radius:10px 10px 0 0; padding:8px 16px; font-weight:600; transition:.18s; }
-.stTabs [data-baseweb="tab"]:hover{ background:#f0fbf6; }
-.stTabs [aria-selected="true"]{ background:var(--rk-green-l); color:var(--rk-green-d) !important; }
+/* ═══ tabs — editorial uppercase, black underline glides ═══ */
+.stTabs [data-baseweb="tab-list"]{ gap:22px; border-bottom:1px solid var(--hair-soft); }
+.stTabs [data-baseweb="tab"]{
+  padding:9px 2px; background:transparent;
+  font-family:'Geist', sans-serif; font-weight:600; font-size:.8rem;
+  text-transform:uppercase; letter-spacing:.055em; color:var(--grey);
+  transition:color .25s var(--ease); }
+.stTabs [data-baseweb="tab"]:hover{ color:var(--ink); background:transparent; }
+.stTabs [aria-selected="true"]{ color:var(--ink) !important; }
+.stTabs [data-baseweb="tab-highlight"]{ background-color:var(--ink); height:2px; border-radius:2px; }
+.stTabs [data-baseweb="tab-border"]{ background-color:var(--hair-soft); }
 
-/* ── buttons ── */
-.stButton>button, .stDownloadButton>button{
-  background:linear-gradient(90deg,var(--rk-green),var(--rk-green-d)); color:#fff !important;
-  border:0; border-radius:10px; padding:.5rem 1.15rem; font-weight:600;
-  box-shadow:0 4px 12px rgba(16,185,129,.30); transition:.2s ease;
+/* ═══ buttons ═══
+   action buttons   → warm-black pills that lift
+   download buttons → outline pills that fill on hover                      */
+.stButton>button, .stFormSubmitButton>button{
+  background:var(--ink); color:#fff !important;
+  border:1px solid var(--ink); border-radius:999px; padding:.52rem 1.35rem;
+  font-family:'Geist', sans-serif; font-weight:600; font-size:.875rem;
+  box-shadow:0 1px 2px rgba(22,22,15,.2);
+  transition:transform .25s var(--ease), box-shadow .25s var(--ease), background .25s var(--ease);
 }
-.stButton>button:hover, .stDownloadButton>button:hover{
-  transform:translateY(-2px); box-shadow:0 9px 22px rgba(16,185,129,.45); }
+.stButton>button:hover, .stFormSubmitButton>button:hover{
+  background:#000; transform:translateY(-2px);
+  box-shadow:0 4px 8px rgba(22,22,15,.14), 0 14px 28px -8px rgba(22,22,15,.32); }
+.stButton>button:active, .stFormSubmitButton>button:active{ transform:translateY(0) scale(.985); }
+.stDownloadButton>button{
+  background:#fff; color:var(--ink) !important;
+  border:1.5px solid var(--ink); border-radius:999px; padding:.5rem 1.3rem;
+  font-family:'Geist', sans-serif; font-weight:600; font-size:.875rem;
+  box-shadow:none; transition:all .25s var(--ease);
+}
+.stDownloadButton>button:hover{
+  background:var(--ink); color:#fff !important; transform:translateY(-2px);
+  box-shadow:0 12px 24px -8px rgba(22,22,15,.35); }
+.stDownloadButton>button:active{ transform:translateY(0) scale(.985); }
 
-/* ── tables / expanders / dividers ── */
-[data-testid="stDataFrame"], [data-testid="stTable"]{ border-radius:12px; overflow:hidden; border:1px solid var(--rk-line); }
-[data-testid="stExpander"]{ border:1px solid var(--rk-line); border-radius:12px; box-shadow:0 1px 6px rgba(6,78,59,.04); }
-hr{ border-color:var(--rk-line); }
+/* ═══ tables · expanders · inputs ═══ */
+[data-testid="stDataFrame"], [data-testid="stTable"]{
+  border-radius:16px; overflow:hidden; border:1px solid var(--hair-soft);
+  box-shadow:var(--shadow-s); }
+[data-testid="stExpander"]{
+  border:1px solid var(--hair-soft); border-radius:16px; background:#fff;
+  box-shadow:var(--shadow-s); transition:box-shadow .3s var(--ease); }
+[data-testid="stExpander"]:hover{ box-shadow:var(--shadow-m); }
+[data-testid="stExpander"] summary p{ font-weight:600; color:var(--ink); }
+hr{ border-color:var(--hair-soft); }
 
-/* file uploader + inputs accent */
-[data-testid="stFileUploaderDropzone"]{ border:1.5px dashed #9fdcc4; border-radius:14px; background:#f3fbf8; transition:.2s; }
-[data-testid="stFileUploaderDropzone"]:hover{ border-color:var(--rk-green); background:#eafaf2; }
+[data-testid="stFileUploaderDropzone"]{
+  border:1.5px dashed var(--hair); border-radius:20px; background:var(--paper-2);
+  transition:border-color .3s var(--ease), background .3s var(--ease); }
+[data-testid="stFileUploaderDropzone"]:hover{ border-color:var(--ink); background:var(--paper-3); }
+[data-testid="stFileUploaderDropzone"] button{
+  border-radius:999px; border:1.5px solid var(--ink); background:#fff;
+  color:var(--ink); font-weight:600; }
+
+/* text inputs / selects — soft paper fields */
+[data-baseweb="input"], [data-baseweb="select"] > div{ border-radius:12px !important; }
+[data-testid="stTextInput"] input{ font-family:'Geist', sans-serif; }
+
+/* alerts — quieter, warmer */
+[data-testid="stAlert"]{ border-radius:14px; border:1px solid var(--hair-soft); }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.image("Recykal logo.jpg", width="stretch")
-    st.markdown("---")
-    page = st.radio(
-        "Navigate",
-        ["Upload Files", "View Databases", "Cleaning", "Summary Report", "Management Reports"],
-        label_visibility="collapsed",
-    )
-    st.markdown("---")
-    # build tag — bump when pushing significant changes; confirms which version
-    # a deployed instance is running (hosted apps can lag behind the repo)
-    st.caption("build: **v3.0.3 — Custom Duty bills now count in the summary on the hosted app (sanitized column names)**")
-    status = db.all_db_status()
-    loaded = [s for s, v in status.items() if v["exists"]]
-    st.caption(f"{len(loaded)} / {len(status)} sheets loaded")
-    for sheet in loaded:
-        tbls = status[sheet]["tables"]
-        row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())
-        st.caption(f"**{sheet}** — {row_str}")
+# ── Top header: logo · capsule nav · build/status ─────────────────────────────
+# Same page list & variable as the old sidebar — routing logic is untouched.
+with st.container(key="rkheader"):
+    _hdr_logo, _hdr_nav, _hdr_meta = st.columns([0.16, 0.66, 0.18], vertical_alignment="center")
+    with _hdr_logo:
+        st.image("Recykal logo.jpg", width=124)
+    with _hdr_nav:
+        page = st.radio(
+            "Navigate",
+            ["Upload Files", "View Databases", "Cleaning", "Summary Report", "Management Reports"],
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+    with _hdr_meta:
+        status = db.all_db_status()
+        loaded = [s for s, v in status.items() if v["exists"]]
+        # build tag — bump when pushing significant changes; confirms which version
+        # a deployed instance is running (hosted apps can lag behind the repo)
+        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.0.4"):
+            st.caption("build: **v3.0.4 — recykal.market design language, capsule top nav (no logic changes)**")
+            for sheet in loaded:
+                tbls = status[sheet]["tables"]
+                row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())
+                st.caption(f"**{sheet}** — {row_str}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -170,7 +277,7 @@ with _recy_pop:
 # Fix the popover trigger as an invisible 56px hotspot; robot SVG drawn over it.
 st.markdown("""
 <style>
-[data-testid="stPopover"]{position:fixed !important;top:74px;right:28px;z-index:100000;width:56px;}
+[data-testid="stPopover"]{position:fixed !important;bottom:26px;right:26px;z-index:100000;width:56px;}
 [data-testid="stPopover"] button{width:56px;height:56px;border-radius:50%;
    background:transparent !important;border:none !important;color:transparent !important;
    box-shadow:none !important;}
@@ -180,42 +287,42 @@ st.markdown("""
 
 st.markdown(
     f"""
-<div style="position:fixed;top:68px;right:28px;z-index:100001;
-            display:flex;align-items:flex-start;gap:6px;pointer-events:none;">
-  <div id="recy-bubble" style="max-width:210px;background:#0b7a3b;color:#fff;padding:8px 11px;
-              border-radius:12px 12px 2px 12px;font-size:11.5px;line-height:1.35;
+<div style="position:fixed;bottom:22px;right:26px;z-index:100001;
+            display:flex;align-items:flex-end;gap:6px;pointer-events:none;">
+  <div id="recy-bubble" style="max-width:210px;background:#16160F;color:#fff;padding:8px 11px;
+              border-radius:12px 12px 2px 12px;font-size:11.5px;line-height:1.35;margin-bottom:6px;
               box-shadow:0 4px 12px rgba(0,0,0,.22);transition:all .15s;">{_RECY_QUIPS.get(page, "Hey, I'm Recy 🤖 — click me!")}</div>
   <div id="recy-bot" style="position:relative;filter:drop-shadow(0 3px 5px rgba(0,0,0,.28));animation:recybob 2.6s ease-in-out infinite;">
     <svg width="46" height="50" viewBox="0 0 46 50" xmlns="http://www.w3.org/2000/svg">
-      <line x1="23" y1="3" x2="23" y2="12" stroke="#0b7a3b" stroke-width="2.4"/>
+      <line x1="23" y1="3" x2="23" y2="12" stroke="#16160F" stroke-width="2.4"/>
       <circle id="recy-antenna" cx="23" cy="3.5" r="3.2" fill="#12b866" style="transition:fill .3s ease;"/>
-      <rect x="3" y="21" width="4.5" height="12" rx="2.2" fill="#0b7a3b"/>
-      <rect x="38.5" y="21" width="4.5" height="12" rx="2.2" fill="#0b7a3b"/>
-      <rect x="6" y="12" width="34" height="28" rx="9" fill="#ffffff" stroke="#0b7a3b" stroke-width="2.6"/>
-      <rect x="11" y="18" width="24" height="15" rx="6" fill="#eafaf0"/>
+      <rect x="3" y="21" width="4.5" height="12" rx="2.2" fill="#16160F"/>
+      <rect x="38.5" y="21" width="4.5" height="12" rx="2.2" fill="#16160F"/>
+      <rect x="6" y="12" width="34" height="28" rx="9" fill="#ffffff" stroke="#16160F" stroke-width="2.6"/>
+      <rect x="11" y="18" width="24" height="15" rx="6" fill="#F2F2EE"/>
       <!-- eyebrows (curious) -->
       <g id="recy-acc-brows" style="opacity:0;transition:opacity .25s ease;">
-        <line x1="14.5" y1="21" x2="20" y2="21.4" stroke="#0b7a3b" stroke-width="1.5" stroke-linecap="round"/>
-        <line x1="26" y1="19.8" x2="31.5" y2="21.6" stroke="#0b7a3b" stroke-width="1.5" stroke-linecap="round"/>
+        <line x1="14.5" y1="21" x2="20" y2="21.4" stroke="#16160F" stroke-width="1.5" stroke-linecap="round"/>
+        <line x1="26" y1="19.8" x2="31.5" y2="21.6" stroke="#16160F" stroke-width="1.5" stroke-linecap="round"/>
       </g>
       <!-- the eyes (hidden behind glasses / heart-eyes) -->
       <g id="recy-eyes" style="transition:opacity .2s ease;">
-        <circle id="recy-eye-l" cx="17.5" cy="25.5" r="3.3" fill="#0b7a3b" style="transform-box:fill-box;transform-origin:center;transition:transform .16s ease-out;"/>
-        <circle id="recy-eye-r" cx="28.5" cy="25.5" r="3.3" fill="#0b7a3b" style="transform-box:fill-box;transform-origin:center;transition:transform .16s ease-out;"/>
+        <circle id="recy-eye-l" cx="17.5" cy="25.5" r="3.3" fill="#16160F" style="transform-box:fill-box;transform-origin:center;transition:transform .16s ease-out;"/>
+        <circle id="recy-eye-r" cx="28.5" cy="25.5" r="3.3" fill="#16160F" style="transform-box:fill-box;transform-origin:center;transition:transform .16s ease-out;"/>
       </g>
       <!-- sunglasses (cool) -->
       <g id="recy-acc-glasses" style="opacity:0;transition:opacity .25s ease;">
-        <rect x="12.8" y="22.2" width="8.6" height="6.4" rx="3.1" fill="#0b7a3b"/>
-        <rect x="24.6" y="22.2" width="8.6" height="6.4" rx="3.1" fill="#0b7a3b"/>
-        <rect x="21.2" y="24.3" width="3.6" height="1.6" fill="#0b7a3b"/>
-        <line x1="7.5" y1="24" x2="12.8" y2="24.6" stroke="#0b7a3b" stroke-width="1.4"/>
-        <line x1="33.2" y1="24.6" x2="38.5" y2="24" stroke="#0b7a3b" stroke-width="1.4"/>
-        <line x1="14.5" y1="24" x2="18.5" y2="24" stroke="#8fd3a8" stroke-width="1" stroke-linecap="round" opacity=".7"/>
-        <line x1="26.5" y1="24" x2="30.5" y2="24" stroke="#8fd3a8" stroke-width="1" stroke-linecap="round" opacity=".7"/>
+        <rect x="12.8" y="22.2" width="8.6" height="6.4" rx="3.1" fill="#16160F"/>
+        <rect x="24.6" y="22.2" width="8.6" height="6.4" rx="3.1" fill="#16160F"/>
+        <rect x="21.2" y="24.3" width="3.6" height="1.6" fill="#16160F"/>
+        <line x1="7.5" y1="24" x2="12.8" y2="24.6" stroke="#16160F" stroke-width="1.4"/>
+        <line x1="33.2" y1="24.6" x2="38.5" y2="24" stroke="#16160F" stroke-width="1.4"/>
+        <line x1="14.5" y1="24" x2="18.5" y2="24" stroke="#D6D5D0" stroke-width="1" stroke-linecap="round" opacity=".7"/>
+        <line x1="26.5" y1="24" x2="30.5" y2="24" stroke="#D6D5D0" stroke-width="1" stroke-linecap="round" opacity=".7"/>
       </g>
-      <path id="recy-mouth" d="M18 30.5 Q23 34 28 30.5" stroke="#0b7a3b" stroke-width="2" fill="none" stroke-linecap="round" style="transition:d .28s ease;"/>
-      <circle cx="12.5" cy="30" r="1.8" fill="#8fd3a8"/>
-      <circle cx="33.5" cy="30" r="1.8" fill="#8fd3a8"/>
+      <path id="recy-mouth" d="M18 30.5 Q23 34 28 30.5" stroke="#16160F" stroke-width="2" fill="none" stroke-linecap="round" style="transition:d .28s ease;"/>
+      <circle cx="12.5" cy="30" r="1.8" fill="#D6D5D0"/>
+      <circle cx="33.5" cy="30" r="1.8" fill="#D6D5D0"/>
       <!-- sweat drop (alert) -->
       <g id="recy-acc-sweat" fill="#4fa3ff" style="opacity:0;transition:opacity .25s ease;">
         <path transform="translate(35 14.5)" d="M0 0 C2.2 3 2.2 5.2 0 5.2 C-2.2 5.2 -2.2 3 0 0 Z"/>
@@ -227,7 +334,7 @@ st.markdown(
         <path transform="translate(38 34) scale(.9)" d="M0 -2.6 L0.7 -0.7 L2.6 0 L0.7 0.7 L0 2.6 L-0.7 0.7 L-2.6 0 L-0.7 -0.7 Z"/>
         <path transform="translate(8 35) scale(.7)"  d="M0 -2.6 L0.7 -0.7 L2.6 0 L0.7 0.7 L0 2.6 L-0.7 0.7 L-2.6 0 L-0.7 -0.7 Z"/>
       </g>
-      <rect x="15" y="40" width="16" height="6" rx="3" fill="#0b7a3b"/>
+      <rect x="15" y="40" width="16" height="6" rx="3" fill="#16160F"/>
     </svg>
   </div>
 </div>

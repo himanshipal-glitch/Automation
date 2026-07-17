@@ -464,6 +464,20 @@ def apply_recommerce_manual(base_df: pd.DataFrame,
     return pd.concat([base_df[keep], m], ignore_index=True)
 
 
+RC_NS_LABEL = "Re-Commerce (Without Samsung)"
+
+
+def rc_without_samsung(profit_df: pd.DataFrame) -> pd.DataFrame:
+    """profit_df minus the Re-Commerce rows whose VENDOR name starts with
+    'Samsung' — feeds the ADDITIVE Without-Samsung view. All other verticals'
+    rows pass through untouched; the regular Re-Commerce view is not affected.
+    Positional: 4 = Supplier Name, 85 = Broad Category."""
+    cat = profit_df.iloc[:, 85].astype(str)
+    is_rc = cat.str.contains(r"re-commerce|recommerce", case=False, na=False)
+    sup = profit_df.iloc[:, 4].astype(str).str.strip().str.lower()
+    return profit_df[~(is_rc & sup.str.startswith("samsung"))]
+
+
 def _itad_reco_mask(df: pd.DataFrame) -> pd.Series:
     """Rows whose shipment has a MISSING BILL (no cost source) — a purchase
     bill was never matched. Covers ALL verticals (not just ITAD). These are
@@ -1364,10 +1378,14 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
                       ar_df: pd.DataFrame | None = None,
                       ap_df: pd.DataFrame | None = None,
                       vertical: str | None = None,
-                      reco_ships: set | None = None) -> bytes:
+                      reco_ships: set | None = None,
+                      rc_ns_summary: pd.DataFrame | None = None) -> bytes:
     """One Excel with four stacked sheets — Summary, Receivables, Payables,
     Details (the profitability report). If `vertical` is given, everything is
-    filtered to it; otherwise all verticals are included (stacked by type)."""
+    filtered to it; otherwise all verticals are included (stacked by type).
+    `rc_ns_summary` (the frozen-overlaid Without-Samsung Re-Commerce summary)
+    ADDS a summary block + a 'Details (No Samsung)' sheet — purely additive,
+    nothing existing moves."""
     import io as _io
     import receivables as _recv
 
@@ -1379,9 +1397,11 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
         # ── Sheet 1: Summary (per-vertical blocks stacked) ────────────────────
         keys = [vertical] if (vertical and vertical in summaries) else list(summaries.keys())
+        _blocks = [(k, summaries.get(k)) for k in keys]
+        if rc_ns_summary is not None and "Re-Commerce" in keys:
+            _blocks.insert(keys.index("Re-Commerce") + 1, (RC_NS_LABEL, rc_ns_summary))
         row = 0
-        for k in keys:
-            df = summaries.get(k)
+        for k, df in _blocks:
             if df is None:
                 continue
             pd.DataFrame([[f"■ {k}"]]).to_excel(w, sheet_name="Summary", startrow=row, startcol=0,
@@ -1668,6 +1688,19 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
                           index=False, header=False)
             _fu.to_excel(w, sheet_name="Details", index=False, startrow=_fu_title)
             _headers.append(("Details", _fu_title + 1))
+
+        # ── Details (No Samsung) — ADDITIVE Re-Commerce subset sheet ─────────
+        # Same rows as the main Details' Re-Commerce section, minus shipments
+        # whose vendor name starts with 'Samsung'. Nothing existing moves.
+        if rc_ns_summary is not None and len(_main):
+            _ns_cat = _main.iloc[:, 85].astype(str)
+            _ns_rc = _ns_cat.str.contains(r"re-commerce|recommerce", case=False, na=False)
+            _ns_sup = _main.iloc[:, 4].astype(str).str.strip().str.lower()
+            _ns = _main[_ns_rc & ~_ns_sup.str.startswith("samsung")]
+            _ns.to_excel(w, sheet_name="Details (No Samsung)", index=False,
+                         startrow=1)   # row 1 = colored group header
+            _add_group_header(w.sheets["Details (No Samsung)"], list(_ns.columns))
+            _headers.append(("Details (No Samsung)", 2))
 
         # ── Sheets 5 & 6: Supplier / Buyer metrics — computed over the SAME
         # whole-FY rows as the Details sheet (main + Finance Up Charge), so

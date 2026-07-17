@@ -216,8 +216,8 @@ with st.container(key="rkheader"):
         loaded = [s for s, v in status.items() if v["exists"]]
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
-        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.0.6"):
-            st.caption("build: **v3.0.6 — Finance Up Charge table = only 'Finance Up-Charge' invoice items; all other lines stay in the main Details table**")
+        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.0.7"):
+            st.caption("build: **v3.0.7 — additive Re-Commerce (Without Samsung) view: second summary table, second Details sheet, signed-off Apr–Jun freeze**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())
@@ -1503,6 +1503,24 @@ elif page == "Summary Report":
         summaries = _build(_sel_pdf)
         st.session_state["_recy_summaries"] = summaries
 
+        # ── Re-Commerce (Without Samsung) — ADDITIVE view ────────────────────
+        # Same pipeline over the same data, minus RC rows whose VENDOR starts
+        # with 'Samsung'. Closed months freeze to the signed-off figures in
+        # frozen.RC_NOSAMSUNG_FROZEN; the open month is live. The regular
+        # Re-Commerce summary above is computed exactly as before — untouched.
+        _rc_ns = None
+        try:
+            if "Re-Commerce" in summaries:
+                _s_ns = reports.summaries_by_category(
+                    reports.rc_without_samsung(_sel_pdf), _ar, _ap,
+                    op_cost_bills=_obills, reco_ships=reco_ships)
+                _rc_ns = _s_ns.get("Re-Commerce")
+                if _rc_ns is not None:
+                    _frozen.apply_rc_nosamsung(_rc_ns, _open_m)
+        except Exception as _nse:
+            _rc_ns = None
+            st.caption(f"⚠ Without-Samsung Re-Commerce view skipped: {_nse}")
+
         try:
             _frozen_tabs = sorted(set(_frozen.latest_files(_app_dir)))
             if _frozen_tabs and _open_m:
@@ -1519,11 +1537,18 @@ elif page == "Summary Report":
                 if sdf.shape[1] <= 2 and len(_sel_pdf) and sdf.iloc[0, -1] == 0:
                     st.info("No data in this category yet.")
                 st.dataframe(sdf, use_container_width=True, hide_index=True, height=640)
+                if name == "Re-Commerce" and _rc_ns is not None:
+                    st.markdown("#### Re-Commerce — Without Samsung (vendor)")
+                    st.caption("Additive view: the same report minus shipments whose vendor "
+                               "name starts with 'Samsung'. Closed months are the signed-off "
+                               "figures; the open month is live.")
+                    st.dataframe(_rc_ns, use_container_width=True, hide_index=True, height=640)
                 safe = name.replace("(", "_").replace(")", "").replace("/", "-").replace(" ", "_")
                 if name != "All Categories":
                     st.download_button(
                         f"⬇ Download {name} (Excel — Summary · Receivables · Payables · Report)",
-                        reports.combined_workbook(summaries, _sel_pdf, _ar, _ap, vertical=name, reco_ships=reco_ships),
+                        reports.combined_workbook(summaries, _sel_pdf, _ar, _ap, vertical=name, reco_ships=reco_ships,
+                                                  rc_ns_summary=_rc_ns if name == "Re-Commerce" else None),
                         file_name=f"profitability_{safe}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         key=f"dl_comb_{name}",
@@ -1546,7 +1571,8 @@ elif page == "Summary Report":
                                          else "_" + _lbl.lower().replace(" ", "_")) + ".xlsx"
             st.download_button(
                 f"⬇ Download ALL Verticals{_sfx} (Excel — Summary · Receivables · Payables · Report)",
-                reports.combined_workbook(_s, _pdf, _ar, _ap, reco_ships=reco_ships),
+                reports.combined_workbook(_s, _pdf, _ar, _ap, reco_ships=reco_ships,
+                                          rc_ns_summary=_rc_ns),
                 file_name=_fn,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key=f"dl_all_{_lbl}",
@@ -1604,7 +1630,8 @@ elif page == "Summary Report":
                     for _v in _s.keys():
                         if _v == "All Categories":
                             continue
-                        _wb = reports.combined_workbook(_s, _pdf, _ar, _ap, vertical=_v, reco_ships=reco_ships)
+                        _wb = reports.combined_workbook(_s, _pdf, _ar, _ap, vertical=_v, reco_ships=reco_ships,
+                                                        rc_ns_summary=_rc_ns if _v == "Re-Commerce" else None)
                         _rcpts = only_to or _rbv.get(_v, _base_to)
                         _safe = _v.replace("(", "_").replace(")", "").replace("/", "-").replace(" ", "_")
                         _vbody = _body.replace("Profitability Report", f"Profitability Report - {_v}")
@@ -1614,7 +1641,8 @@ elif page == "Summary Report":
                             html=_mail_html(_s, _v, _vbody))
                         results.append(f"{'✅' if _ok else '❌'} {_v}{_vsfx}: {_msg}")
                 else:
-                    _wb = reports.combined_workbook(_s, _pdf, _ar, _ap, reco_ships=reco_ships)
+                    _wb = reports.combined_workbook(_s, _pdf, _ar, _ap, reco_ships=reco_ships,
+                                                    rc_ns_summary=_rc_ns)
                     _ok, _msg = _mailer.send_report(
                         only_to or _base_to, f"{_subj}{_vsfx}", _body, _wb,
                         f"profitability_all{_fsfx}.xlsx", _cfg,

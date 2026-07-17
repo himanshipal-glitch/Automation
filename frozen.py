@@ -370,6 +370,47 @@ def _rederive_splits(df: pd.DataFrame) -> None:
             df.iat[iold, c] = round(p - p * r, 0)
 
 
+# ── Re-Commerce WITHOUT-Samsung — signed-off closed months ────────────────────
+# No manual "till DD-MM" file exists for this subset; the figures were provided
+# by the finance team (Jul-2026). Keys = SUMMARY_METRICS row index.
+RC_NOSAMSUNG_FROZEN: dict[str, dict[int, float]] = {
+    "Apr-26": {0: 89,  1: 134576,  2: 132764,  3: 1812,   4: 1.35,   5: 199520,
+               6: -197708, 7: -146.91, 8: 1.51,  9: 1.49,  10: 0,
+               11: 2,  12: 1, 13: 1, 14: 0,
+               15: 57626019, 18: 10887, 19: -2192780, 22: -420, 23: 11306,
+               24: 0, 25: 0.0, 26: 0, 27: 0.0},
+    "May-26": {0: 330, 1: 983715,  2: 960432,  3: 23283,  4: 2.37,   5: -199520,
+               6: 222803,  7: 22.65,  8: 2.98,  9: 2.91,  10: 0,
+               11: 8,  12: 1, 13: 2, 14: 0,
+               15: 48789620, 18: 1303, 19: -3812553, 22: -104, 23: 1407,
+               24: 0, 25: 0.0, 26: 0, 27: 0.0},
+    "Jun-26": {0: 434, 1: 6051182, 2: 5578660, 3: 472522, 4: 7.81,   5: 0,
+               6: 472522,  7: 7.81,   8: 13.94, 9: 12.85, 10: 0,
+               11: 33, 12: 1, 13: 5, 14: 0,
+               15: 53822926, 18: 226, 19: -3063235, 22: -14, 23: 240,
+               24: 0, 25: 0.0, 26: 0, 27: 0.0},
+}
+
+
+def apply_rc_nosamsung(df: pd.DataFrame, open_month: str | None) -> pd.DataFrame:
+    """Freeze the Without-Samsung Re-Commerce summary's CLOSED months to the
+    signed-off figures above, then recompute the FY Total and the open-month
+    residual exactly like the file-based overlay. Mutates & returns df."""
+    open_dt = _mdt(open_month) if open_month else None
+    for m, cells in RC_NOSAMSUNG_FROZEN.items():
+        if m not in df.columns:
+            continue
+        if open_dt is not None and pd.notna(_mdt(m)) and _mdt(m) >= open_dt:
+            continue                               # never touch the open month
+        cloc = df.columns.get_loc(m)
+        for idx, val in cells.items():
+            if 0 <= idx < len(df):
+                df.iat[idx, cloc] = _round_cell(idx, val)
+    _recompute_fy(df, open_month, tab="Re-Commerce")
+    _rederive_splits(df)
+    return df
+
+
 def frozen_details(folder: str) -> dict:
     """{app tab label: (detail_df, {mmm-yy, …})} — the LINE-BY-LINE rows of each
     vertical's fully-covered closed months, read from the manual report files'

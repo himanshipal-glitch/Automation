@@ -220,8 +220,8 @@ with st.container(key="rkheader"):
         loaded = [s for s, v in status.items() if v["exists"]]
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
-        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.1.1"):
-            st.caption("build: **v3.1.1 — Recy draws charts (bar/line) of the live summary numbers on request**")
+        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.1.2"):
+            st.caption("build: **v3.1.2 — Recy roams the screen like a desktop pet (idle wander, waddle, comes home for chats)**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())
@@ -488,12 +488,64 @@ _components.html(
     if(ok&&R.mood!=='celebrate')R.setMood('celebrate',3000);
   };
 
+
+  // ── roaming pet engine — Recy wanders the bottom edge when idle ───────────
+  // (like a desktop pet: waddles to random spots, pauses, heads home; never
+  //  wanders while the chat is open / he's thinking; freezes when the cursor
+  //  is near so he's always clickable; the chat hotspot walks with him.)
+  R.BOTW=46; R.PAD=26;
+  R.homeX=function(){return pdoc.documentElement.clientWidth-R.PAD-R.BOTW;};
+  if(R.px===undefined){R.px=null;}          // null = anchored at his home corner
+  R.tx=R.tx||null; R.pauseT=R.pauseT||0;
+  R.nextRoamAt=R.nextRoamAt||(Date.now()+15000);
+  R.mx=-9999; R.my=-9999;
+  R.chatOpen=function(){const p=pdoc.querySelector('[data-testid="stPopover"]');
+    return !!(p&&p.querySelector('button[aria-expanded="true"]'));};
+  R.applyPos=function(){const bot=pdoc.getElementById('recy-bot');if(!bot)return;
+    const cont=bot.parentElement,pop=pdoc.querySelector('[data-testid="stPopover"]'),
+          bub=pdoc.getElementById('recy-bubble');
+    if(R.px==null){cont.style.left='';cont.style.right='26px';
+      if(pop){pop.style.left='';pop.style.right='26px';}
+      if(bub)bub.style.display='';
+      bot.style.transform='';bot.style.animation='';return;}
+    if(bub)bub.style.display='none';        // quips live at home only
+    cont.style.right='auto';cont.style.left=R.px+'px';
+    if(pop){pop.style.right='auto';pop.style.left=R.px+'px';}};
+  R.roamTick=function(){
+    const bot=pdoc.getElementById('recy-bot');if(!bot)return;
+    const w=pdoc.documentElement.clientWidth;
+    if(w<760||pdoc.defaultView.matchMedia('(prefers-reduced-motion: reduce)').matches){
+      if(R.px!=null){R.px=null;R.applyPos();}return;}
+    const now=Date.now(), busy=R.chatOpen()||R.mood!=='idle';
+    const r=bot.getBoundingClientRect();
+    const near=Math.abs(R.mx-(r.left+r.width/2))<70&&Math.abs(R.my-(r.top+r.height/2))<90;
+    if(R.px==null){                                     // anchored at home
+      if(busy||near||now<R.nextRoamAt)return;
+      R.px=R.homeX(); R.tx=60+Math.random()*(w*0.7);    // set off!
+    }
+    if(busy)R.tx=R.homeX();                             // called back to duty
+    if((near&&!busy)||now<R.pauseT){R.applyPos();return;}  // freeze / sniff around
+    const dx=R.tx-R.px, step=2.2;
+    if(Math.abs(dx)<=step){                             // arrived
+      R.px=R.tx;
+      if(Math.abs(R.px-R.homeX())<4){                   // back home → re-anchor
+        R.px=null;R.tx=null;R.nextRoamAt=now+20000+Math.random()*40000;
+        R.applyPos();return;}
+      R.pauseT=now+2500+Math.random()*6000;             // linger, then move on
+      R.tx=(Math.random()<0.45)?R.homeX():60+Math.random()*(w*0.7);
+      R.applyPos();return;}
+    R.px+=Math.sign(dx)*step;
+    bot.style.animation='none';                         // waddle instead of bob
+    bot.style.transform='scaleX('+(dx<0?-1:1)+') rotate('+(Math.sin(R.px/7)*5).toFixed(2)+'deg)';
+    R.applyPos();};
+
   // ── bind listeners + timers ONCE (all delegate to the R.* above) ───────────
   if(!pdoc.__recyBound){
     pdoc.__recyBound=true;
     pdoc.addEventListener('mouseover',function(e){R.hover(e);},true);
     pdoc.addEventListener('click',function(e){R.onClick(e);},true);
-    pdoc.addEventListener('mousemove',function(e){R.onMove(e);},true);
+    pdoc.addEventListener('mousemove',function(e){R.mx=e.clientX;R.my=e.clientY;R.onMove(e);},true);
+    setInterval(function(){try{R.roamTick();}catch(err){}},40);
     // gentle blink every few seconds, only when idle — so Recy feels alive
     setInterval(function(){
       if(R.mood!=='idle')return;

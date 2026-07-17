@@ -59,7 +59,10 @@ html, body, [class*="css"], .stApp{
 
 /* page entrance — content settles like a sheet of paper */
 .main .block-container, .stMainBlockContainer{
-  animation:rkRise .6s var(--ease) both; padding-top:.6rem; max-width:1400px; }
+  animation:rkPage .5s var(--ease) both; padding-top:.6rem; max-width:1400px; }
+/* opacity-only on the page container — a TRANSFORM here would hijack
+   position:fixed for everything inside (Recy would scroll with the page) */
+@keyframes rkPage{ from{opacity:0;} to{opacity:1;} }
 @keyframes rkRise{ from{opacity:0; transform:translateY(16px) scale(.995);} to{opacity:1; transform:none;} }
 
 [data-testid="stHeader"]{ background:transparent; }
@@ -220,8 +223,8 @@ with st.container(key="rkheader"):
         loaded = [s for s, v in status.items() if v["exists"]]
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
-        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.1.2"):
-            st.caption("build: **v3.1.2 — Recy roams the screen like a desktop pet (idle wander, waddle, comes home for chats)**")
+        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.1.3"):
+            st.caption("build: **v3.1.3 — Recy always on screen (fixed-position fix) and roams the WHOLE page, perching on buttons**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())
@@ -489,54 +492,75 @@ _components.html(
   };
 
 
-  // ── roaming pet engine — Recy wanders the bottom edge when idle ───────────
-  // (like a desktop pet: waddles to random spots, pauses, heads home; never
-  //  wanders while the chat is open / he's thinking; freezes when the cursor
-  //  is near so he's always clickable; the chat hotspot walks with him.)
-  R.BOTW=46; R.PAD=26;
+  // ── roaming pet engine — Recy wanders the WHOLE screen when idle ──────────
+  // Desktop-pet style: strolls to random spots, perches on top of buttons/tabs,
+  // lingers, eventually heads home to his corner. Never wanders while the chat
+  // is open or he's thinking; freezes when the cursor comes near so he's always
+  // clickable; the chat hotspot travels with him.
+  R.BOTW=46; R.BOTH=50; R.PAD=26;
   R.homeX=function(){return pdoc.documentElement.clientWidth-R.PAD-R.BOTW;};
-  if(R.px===undefined){R.px=null;}          // null = anchored at his home corner
-  R.tx=R.tx||null; R.pauseT=R.pauseT||0;
+  R.homeY=function(){return pdoc.documentElement.clientHeight-22-R.BOTH;};
+  if(R.px===undefined){R.px=null;R.py=null;}   // null = anchored at his corner
+  R.tx=R.tx||null; R.ty=R.ty||null; R.pauseT=R.pauseT||0;
   R.nextRoamAt=R.nextRoamAt||(Date.now()+15000);
   R.mx=-9999; R.my=-9999;
   R.chatOpen=function(){const p=pdoc.querySelector('[data-testid="stPopover"]');
     return !!(p&&p.querySelector('button[aria-expanded="true"]'));};
+  R.pickTarget=function(w,h){
+    // 60%: perch on a visible button / tab / expander header
+    if(Math.random()<0.6){
+      const els=Array.from(pdoc.querySelectorAll('button,[role="tab"],summary'))
+        .filter(function(el){if(!el.offsetParent)return false;
+          const r=el.getBoundingClientRect();
+          return r.width>=46&&r.height>=18&&r.top>96&&r.bottom<h-60&&r.left>36&&r.right<w-36;});
+      if(els.length){const r=els[(Math.random()*els.length)|0].getBoundingClientRect();
+        return {x:Math.min(Math.max(r.left+r.width/2-R.BOTW/2,10),w-R.BOTW-10),
+                y:Math.max(r.top-R.BOTH+8,70)};}                 // sit ON its top edge
+    }
+    return {x:40+Math.random()*Math.max(w-140,60),               // or any open spot
+            y:100+Math.random()*Math.max(h-280,60)};
+  };
   R.applyPos=function(){const bot=pdoc.getElementById('recy-bot');if(!bot)return;
     const cont=bot.parentElement,pop=pdoc.querySelector('[data-testid="stPopover"]'),
           bub=pdoc.getElementById('recy-bubble');
-    if(R.px==null){cont.style.left='';cont.style.right='26px';
-      if(pop){pop.style.left='';pop.style.right='26px';}
+    if(R.px==null){cont.style.left='';cont.style.top='';cont.style.right='26px';cont.style.bottom='22px';
+      if(pop){pop.style.left='';pop.style.top='';pop.style.right='26px';pop.style.bottom='26px';}
       if(bub)bub.style.display='';
       bot.style.transform='';bot.style.animation='';return;}
-    if(bub)bub.style.display='none';        // quips live at home only
-    cont.style.right='auto';cont.style.left=R.px+'px';
-    if(pop){pop.style.right='auto';pop.style.left=R.px+'px';}};
+    if(bub)bub.style.display='none';            // quips live at home only
+    cont.style.right='auto';cont.style.bottom='auto';
+    cont.style.left=R.px+'px';cont.style.top=R.py+'px';
+    if(pop){pop.style.right='auto';pop.style.bottom='auto';
+      pop.style.left=R.px+'px';pop.style.top=R.py+'px';}};
   R.roamTick=function(){
     const bot=pdoc.getElementById('recy-bot');if(!bot)return;
-    const w=pdoc.documentElement.clientWidth;
+    const w=pdoc.documentElement.clientWidth,h=pdoc.documentElement.clientHeight;
     if(w<760||pdoc.defaultView.matchMedia('(prefers-reduced-motion: reduce)').matches){
-      if(R.px!=null){R.px=null;R.applyPos();}return;}
+      if(R.px!=null){R.px=null;R.py=null;R.applyPos();}return;}
     const now=Date.now(), busy=R.chatOpen()||R.mood!=='idle';
     const r=bot.getBoundingClientRect();
     const near=Math.abs(R.mx-(r.left+r.width/2))<70&&Math.abs(R.my-(r.top+r.height/2))<90;
-    if(R.px==null){                                     // anchored at home
+    if(R.px==null){                                       // anchored at home
       if(busy||near||now<R.nextRoamAt)return;
-      R.px=R.homeX(); R.tx=60+Math.random()*(w*0.7);    // set off!
+      R.px=R.homeX();R.py=R.homeY();
+      const t=R.pickTarget(w,h);R.tx=t.x;R.ty=t.y;        // set off!
     }
-    if(busy)R.tx=R.homeX();                             // called back to duty
-    if((near&&!busy)||now<R.pauseT){R.applyPos();return;}  // freeze / sniff around
-    const dx=R.tx-R.px, step=2.2;
-    if(Math.abs(dx)<=step){                             // arrived
-      R.px=R.tx;
-      if(Math.abs(R.px-R.homeX())<4){                   // back home → re-anchor
-        R.px=null;R.tx=null;R.nextRoamAt=now+20000+Math.random()*40000;
-        R.applyPos();return;}
-      R.pauseT=now+2500+Math.random()*6000;             // linger, then move on
-      R.tx=(Math.random()<0.45)?R.homeX():60+Math.random()*(w*0.7);
+    if(busy){R.tx=R.homeX();R.ty=R.homeY();}              // called back to duty
+    if((near&&!busy)||now<R.pauseT){R.applyPos();return;} // freeze / linger
+    const dx=R.tx-R.px,dy=R.ty-R.py,dist=Math.hypot(dx,dy),step=2.4;
+    if(dist<=step){                                       // arrived
+      R.px=R.tx;R.py=R.ty;
+      if(Math.hypot(R.px-R.homeX(),R.py-R.homeY())<6){    // back home → re-anchor
+        R.px=null;R.py=null;R.tx=null;R.ty=null;
+        R.nextRoamAt=now+20000+Math.random()*40000;R.applyPos();return;}
+      R.pauseT=now+3000+Math.random()*7000;               // perch a while
+      bot.style.transform='scaleX(1)';                    // sit straight
+      if(Math.random()<0.5){R.tx=R.homeX();R.ty=R.homeY();}
+      else{const t=R.pickTarget(w,h);R.tx=t.x;R.ty=t.y;}
       R.applyPos();return;}
-    R.px+=Math.sign(dx)*step;
-    bot.style.animation='none';                         // waddle instead of bob
-    bot.style.transform='scaleX('+(dx<0?-1:1)+') rotate('+(Math.sin(R.px/7)*5).toFixed(2)+'deg)';
+    R.px+=dx/dist*step;R.py+=dy/dist*step;
+    bot.style.animation='none';                           // waddle instead of bob
+    bot.style.transform='scaleX('+(dx<0?-1:1)+') rotate('+(Math.sin((R.px+R.py)/7)*5).toFixed(2)+'deg)';
     R.applyPos();};
 
   // ── bind listeners + timers ONCE (all delegate to the R.* above) ───────────

@@ -102,10 +102,11 @@ ENTERPRISE MANUAL INPUTS (Summary page expanders): 1) Custom Duty bills —
 purchases with no bill/invoice in Zoho, entered per month; they appear in the
 Details sheet (Material "Custom Duty", vendor Black Gold, no Shipment ID) and
 count in FY-Total Purchases. 2) Operational Cost overrides per month — each
-stored month also appears in the Details sheet as a 'Service Charges
-(Mon-YY)' line item (Black Gold vendor, amount in the Operational Cost
-column, month-end date) — display/audit only, the summary row uses the
-same override. Both are
+stored month appears as a 'Service Charges (Mon-YY)' line item (Black Gold
+vendor, amount in the Operational Cost column, month-end date) in its OWN
+'OPERATIONAL COST' table below the main Details table, like the Finance Up
+Charge block — display/audit only, the summary row uses the same override.
+Both are
 stored permanently and stay until edited; with [github] secrets configured the
 saves auto-commit to the repo so they survive hosted restarts/redeploys.
 

@@ -1752,7 +1752,15 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
             m = df[c].astype(str).str.lower().str.replace(r"[^a-z]", "", regex=True)
             return m.str.startswith("financeup")
 
-        _main = _rep[~_fu_of(_rep)]                        # keep them out of the main table
+        def _oc_of(df):
+            c = next((c for c in df.columns
+                      if "".join(ch for ch in str(c).lower() if ch.isalnum()) == "costsource"), None)
+            if c is None:
+                return pd.Series(False, index=df.index)
+            return df[c].astype(str).str.strip().eq(OPCOST_COST_SOURCE)
+
+        _ocrows = _rep[_oc_of(_rep)]                       # manual Op-Cost line items
+        _main = _rep[~_fu_of(_rep) & ~_oc_of(_rep)]        # keep both out of the main table
         _fu = _live_src[_fu_of(_live_src)]
         if len(_fu) and vertical:
             _vkey = "".join(ch for ch in str(vertical).lower() if ch.isalnum())
@@ -1773,14 +1781,23 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
                        startrow=1)   # row 1 reserved for the colored group header
         _add_group_header(w.sheets["Details"], list(_main.columns))
         _headers.append(("Details", 2))   # column header, shifted by the group row
+        # sub-tables below the main Details table (manual layout):
+        # 2 blank rows · TITLE · repeated column header · the rows — per block
+        _next_title = 2 + len(_main) + 3                       # 1-indexed excel row
         if len(_fu):
-            # 2 blank rows · title · repeated column header · the FU rows
-            _fu_title = 2 + len(_main) + 3                     # 1-indexed excel row
             pd.DataFrame([["FINANCE UP CHARGE — invoice line items named 'Finance Up-Charge'"]]) \
-                .to_excel(w, sheet_name="Details", startrow=_fu_title - 1, startcol=0,
+                .to_excel(w, sheet_name="Details", startrow=_next_title - 1, startcol=0,
                           index=False, header=False)
-            _fu.to_excel(w, sheet_name="Details", index=False, startrow=_fu_title)
-            _headers.append(("Details", _fu_title + 1))
+            _fu.to_excel(w, sheet_name="Details", index=False, startrow=_next_title)
+            _headers.append(("Details", _next_title + 1))
+            _next_title += 1 + len(_fu) + 3                    # title+header+rows+2 blanks
+        if len(_ocrows):
+            pd.DataFrame([["OPERATIONAL COST — user-entered monthly Service Charges "
+                           "(drives the Summary's Operational Cost row)"]]) \
+                .to_excel(w, sheet_name="Details", startrow=_next_title - 1, startcol=0,
+                          index=False, header=False)
+            _ocrows.to_excel(w, sheet_name="Details", index=False, startrow=_next_title)
+            _headers.append(("Details", _next_title + 1))
 
         # ── Details (No Samsung) — ADDITIVE Re-Commerce subset sheet ─────────
         # Driven by the signed-off WITHOUT-Samsung manual detail store (same

@@ -223,8 +223,8 @@ with st.container(key="rkheader"):
         loaded = [s for s, v in status.items() if v["exists"]]
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
-        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.1.6"):
-            st.caption("build: **v3.1.6 — user-entered Operational Cost months appear as Service Charges line items in the Details sheet**")
+        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.1.7"):
+            st.caption("build: **v3.1.7 — Operational Cost line items in their OWN table below Details (like Finance Up Charge)**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())

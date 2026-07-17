@@ -220,8 +220,8 @@ with st.container(key="rkheader"):
         loaded = [s for s, v in status.items() if v["exists"]]
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
-        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.0.9"):
-            st.caption("build: **v3.0.9 — Op-Cost & Custom Duty entries survive restarts (GitHub write-through via [github] secrets)**")
+        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.1.0"):
+            st.caption("build: **v3.1.0 — Recy upgraded: full-table + formula knowledge, reads images, files change requests as GitHub issues**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())
@@ -252,8 +252,11 @@ with _recy_pop:
     # process a pending question (set by the form below, handled on rerun)
     _pend = st.session_state.pop("recy_pending", None)
     if _pend:
+        if isinstance(_pend, str):                     # backward compat
+            _pend = {"q": _pend, "imgs": []}
         _hist = st.session_state.setdefault("recy_hist", [])
-        _hist.append({"role": "user", "content": _pend})
+        _hist.append({"role": "user", "content": _pend["q"],
+                      "imgs": _pend.get("imgs") or []})
         # live app-state snapshot so Recy knows where the user is & what's loaded
         _built = bool(st.session_state.get("_recy_summaries"))
         _state = (f"CURRENT STATE: the user is on the '{page}' page. "
@@ -261,7 +264,9 @@ with _recy_pop:
                   f"Profitability report is {'BUILT and on screen' if _built else 'not built yet'}. "
                   "Answer with this in mind — don't tell them to upload/build things that are already done.")
         with st.spinner("Recy is thinking…"):
-            _ans = _assistant.ask(_pend, st.session_state.get("_recy_summaries"), _hist, app_state=_state)
+            _ans = _assistant.ask(_pend["q"], st.session_state.get("_recy_summaries"),
+                                  _hist, app_state=_state,
+                                  images=_pend.get("imgs") or None)
         _hist.append({"role": "assistant", "content": _ans})
     # fixed-size scrollable log — latest at the bottom, scroll up for older
     with st.container(height=300):
@@ -269,14 +274,39 @@ with _recy_pop:
         if not _h:
             st.caption("Hi! I'm Recy 🤖 — ask me how the app works, a rule, or a number.")
         for _m in _h:
-            st.chat_message("user" if _m["role"] == "user" else "assistant").write(_m["content"])
+            _msg = st.chat_message("user" if _m["role"] == "user" else "assistant")
+            _msg.write(_m["content"])
+            for _mime, _bd in _m.get("imgs", []):
+                import base64 as _b64d
+                _msg.image(_b64d.b64decode(_bd))
         st.markdown('<span class="recylog-end"></span>', unsafe_allow_html=True)
     with st.form("recy_form", clear_on_submit=True):
         _q = st.text_input("Ask…", label_visibility="collapsed",
-                           placeholder="Ask about the app or the numbers…")
+                           placeholder="Ask about the app, the numbers, or an attached image…")
+        _img_files = st.file_uploader("📷 Attach image(s) — screenshots of workbooks, errors…",
+                                      type=["png", "jpg", "jpeg", "webp"],
+                                      accept_multiple_files=True, key="recy_imgs")
         if st.form_submit_button("Ask", use_container_width=True) and _q.strip():
-            st.session_state["recy_pending"] = _q.strip()
+            import base64 as _b64e
+            _imgs = [( _f.type or "image/png", _b64e.b64encode(_f.getvalue()).decode())
+                     for _f in (_img_files or [])[:4]]
+            st.session_state["recy_pending"] = {"q": _q.strip(), "imgs": _imgs}
             st.rerun()
+    # change requests: Recy drafts the change in chat; this files it for HUMAN
+    # review as a GitHub issue — Recy never edits code or data itself.
+    if _assistant.github_configured() and st.session_state.get("recy_hist"):
+        if st.button("📝 File the last exchange as a change request (GitHub issue)",
+                     key="recy_cr", use_container_width=True):
+            _h2 = st.session_state["recy_hist"]
+            _lq = next((m["content"] for m in reversed(_h2) if m["role"] == "user"), "")
+            _la = next((m["content"] for m in reversed(_h2) if m["role"] == "assistant"), "")
+            _ok, _res = _assistant.file_change_request(
+                f"Change request: {_lq[:100]}",
+                "**Request (asked in-app):**\n\n" + _lq
+                + "\n\n**Recy's draft:**\n\n" + _la)
+            (st.success if _ok else st.error)(_res)
+            if _ok:
+                st.caption("A human reviews & merges it — nothing changes automatically.")
 
 # Fix the popover trigger as an invisible 56px hotspot; robot SVG drawn over it.
 st.markdown("""
@@ -1540,6 +1570,9 @@ elif page == "Summary Report":
         except Exception as _nse:
             _rc_ns = None
             st.caption(f"⚠ Without-Samsung Re-Commerce view skipped: {_nse}")
+        if _rc_ns is not None:
+            st.session_state["_recy_summaries"] = {
+                **summaries, "Re-Commerce (Without Samsung)": _rc_ns}
 
         try:
             _frozen_tabs = sorted(set(_frozen.latest_files(_app_dir)))

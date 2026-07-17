@@ -119,10 +119,44 @@ without-Samsung detail file.
 NAMING: the Metal vertical is displayed as "End Generator" everywhere (tabs,
 sheets, emails); the Zoho export may still say "Metal" internally.
 
-ABOUT ME (Recy): I answer questions using the app knowledge, the maintainer
-guide and a live snapshot of the on-screen numbers. I CANNOT change data, edit
-entries, run the pipeline or modify code — everything that changes state goes
-through the app's own buttons. I currently read text only (no images).
+FORMULAS — the exact calculation logic (use for "how is X computed?" and for
+checking numbers; the LIVE DATA snapshot gives every metric of every month):
+- Row level (Details sheet): Total Cost = Purchase Price + Logistics + Diversion
+  + Full-DN cost + Customs − Actual DN − Provision DN. Actual DN is ex-GST
+  (Zoho vendor-credit ÷ 1.18); ALL notes on a shipment are summed and
+  de-duplicated at document level. A CN ≥95% of the sale = full reversal.
+- Summary Sales (month) = Σ invoice Amount − (Actual CN + Provision CN).
+- Summary Purchases = Σ Purchase Price − (Actual DN + Provision DN), which
+  equals Σ(Total Cost − Logistics) since diversion/customs are 0 in the engine.
+  EXCEPTION: Re-Commerce, ReWerse & Processing Center show GROSS purchases (no
+  DN netting — their manuals carry ~0 DN).
+- Gross Margin = Sales − Purchases; GM% = GM ÷ Sales.
+- Net Margin = GM − Transportation − Operational Cost; NM% = NM ÷ Sales.
+- Revenue/Purchase per Kg = value ÷ Kg (IT AD & Re-Commerce divide by UNITS).
+- Provisions: CN = rate × sale, DN = rate × purchase. Rates: End Generator
+  4.55%, Plastic 2.5%, ReWerse 2.5%. Suppressed when the shipment has an actual
+  CN, is on the CF.DN=No list, has a blank shipment id, a void DN, or is a
+  known fake-DN shipment.
+- DSO = Receivable ÷ (Sales×1.18) × days; DPO = Payable ÷ (Purchases×1.18) ×
+  days; Working Capital Days = DSO − DPO. The open month uses the cutoff day.
+- Freeze/residual: closed months show signed-off values; open month Qty/Sales/
+  Purchases = pre-freeze FY (from the whole detail) − Σ frozen priors, so the
+  FY Total always equals Σ displayed months and cross-checks the Details sheet.
+  Custom Duty in a frozen month therefore surfaces via FY total + open month.
+- Re-Commerce Without-Samsung: identical formulas on the subset whose vendor
+  name doesn't start with 'Samsung'; Apr–Jun frozen to signed-off figures.
+
+ABOUT ME (Recy): I answer using this knowledge, the maintainer guide, CLAUDE.md
+and a LIVE snapshot of every vertical's full summary table (all metrics × all
+months), so I can explain and verify calculations against the actual numbers.
+I can READ ATTACHED IMAGES (workbook screenshots, Zoho errors, manual reports)
+and answer questions about them — compare figures, spot differences, read cells.
+I CANNOT edit code or data myself, deliberately: this app produces signed-off
+financials, so every change goes through human review. If someone wants a logic
+change, I draft the exact change (what file/rule, what new behaviour) and they
+click "📝 File change request" to open a GitHub issue for review — or they open
+this folder in Claude Code, which maintains the app. Never promise to change
+anything myself.
 
 EMAIL: "Send to team" sends the report — summary table + top-5 materials of the
 latest data month inline (Indian number format), workbook attached; optionally one
@@ -152,15 +186,55 @@ Warm and a little playful, but don't waste words. Use at most one emoji.
 
 
 def _load_guide() -> str:
-    """Feed the maintainer guide into Recy's context so its knowledge tracks the
-    docs — update MAINTAINER_GUIDE.md and Recy learns it on the next question."""
+    """Feed the maintainer guide + CLAUDE.md into Recy's context so its
+    knowledge tracks the docs — update either file and Recy learns it on the
+    next question."""
+    out = []
+    base = os.path.dirname(os.path.abspath(__file__))
+    for fn, label in (("MAINTAINER_GUIDE.md", "the project's maintainer guide "
+                       "(rule map, troubleshooting playbook, change recipes)"),
+                      ("CLAUDE.md", "the project's architecture & hard-rules file")):
+        try:
+            with open(os.path.join(base, fn), encoding="utf-8") as f:
+                out.append(f"\n\nREFERENCE — {label}:\n" + f.read())
+        except Exception:
+            pass
+    return "".join(out)
+
+
+def github_configured() -> bool:
     try:
-        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "MAINTAINER_GUIDE.md")
-        with open(p, encoding="utf-8") as f:
-            return ("\n\nREFERENCE — the project's maintainer guide (rule map, "
-                    "troubleshooting playbook, change recipes):\n" + f.read())
+        import streamlit as st
+        g = st.secrets.get("github", None)
+        return bool(g and g.get("token") and g.get("repo"))
     except Exception:
-        return ""
+        return False
+
+
+def file_change_request(title: str, body: str) -> tuple[bool, str]:
+    """Open a GitHub ISSUE with the drafted change — the safe path for
+    'Recy, change the logic': a human reviews it before any code moves.
+    Needs [github] secrets with a PAT that has Issues: write."""
+    try:
+        import streamlit as st
+        g = st.secrets["github"]
+        token, repo = g["token"], g["repo"]
+    except Exception:
+        return False, "GitHub isn't configured ([github] secrets missing)."
+    try:
+        r = requests.post(
+            f"https://api.github.com/repos/{repo}/issues",
+            headers={"Authorization": f"Bearer {token}",
+                     "Accept": "application/vnd.github+json"},
+            json={"title": title[:120],
+                  "body": body + "\n\n_Filed from the app via Recy (change request)._",
+                  "labels": ["change-request"]},
+            timeout=20)
+        if r.status_code == 201:
+            return True, r.json().get("html_url", "created")
+        return False, f"GitHub said {r.status_code}: {r.text[:120]}"
+    except Exception as e:
+        return False, f"Couldn't reach GitHub: {e}"
 
 
 def get_api_key() -> str | None:
@@ -180,31 +254,28 @@ def is_configured() -> bool:
 
 
 def build_data_context(summaries: dict | None) -> str:
-    """Compact per-vertical snapshot (FY figures) so the bot can answer data Qs."""
+    """FULL per-vertical snapshot — every metric of every month + FY Total —
+    so the bot can answer and verify any calculation question."""
     if not summaries:
         return "LIVE DATA: (no report is loaded yet — the user hasn't run it.)"
-    want = {"Sales", "Purchases", "Gross Margin", "Net Margin", "Operational Cost",
-            "Receivables (exl Legacy)", "DSO (Days)", "Payable", "DPO (Days)"}
-    lines = ["LIVE DATA — FY totals per vertical:"]
+    lines = ["LIVE DATA — the complete on-screen summary tables "
+             "(one block per vertical; rows = metrics, columns = months + FY Total):"]
     for name, df in summaries.items():
         try:
-            if "Metric" not in df.columns or "FY Total" not in df.columns:
+            if "Metric" not in df.columns:
                 continue
-            picks = []
-            for _, r in df.iterrows():
-                m = str(r["Metric"])
-                if m in want:
-                    v = r["FY Total"]
-                    picks.append(f"{m}={v:,.0f}" if isinstance(v, (int, float)) else f"{m}={v}")
-            if picks:
-                lines.append(f"• {name}: " + ", ".join(picks))
+            lines.append(f"\n### {name}")
+            lines.append(df.to_csv(index=False, float_format="%.2f").strip())
         except Exception:
             continue
     return "\n".join(lines)
 
 
 def ask(question: str, summaries: dict | None = None, history: list | None = None,
-        app_state: str | None = None) -> str:
+        app_state: str | None = None,
+        images: list[tuple[str, str]] | None = None) -> str:
+    """`images` = list of (mime_type, base64_data) attached to THIS question —
+    Gemini is multimodal, so Recy can read workbook screenshots etc."""
     key = get_api_key()
     if not key:
         return ("I'm not switched on yet — add a Gemini API key to `.streamlit/secrets.toml` "
@@ -215,9 +286,15 @@ def ask(question: str, summaries: dict | None = None, history: list | None = Non
     if history:
         prompt += "\n\nRecent conversation:\n" + "\n".join(
             f"{h['role']}: {h['content']}" for h in history[-6:])
+    if images:
+        prompt += ("\n\nThe user attached the image(s) below with this question — "
+                   "read them carefully and use them in your answer.")
     prompt += f"\n\nUser question: {question}\n\nAnswer as Recy:"
-    payload = {"contents": [{"parts": [{"text": prompt}]}],
-               "generationConfig": {"temperature": 0.5, "maxOutputTokens": 1400}}
+    parts = [{"text": prompt}]
+    for _mime, _b64 in (images or []):
+        parts.append({"inline_data": {"mime_type": _mime, "data": _b64}})
+    payload = {"contents": [{"parts": parts}],
+               "generationConfig": {"temperature": 0.5, "maxOutputTokens": 2000}}
     url = _ENDPOINT.format(model=MODEL, key=key)
     # connect quickly (5s) but allow the model plenty of time to answer (60s);
     # retry once on a timeout/connection blip since those are usually transient.

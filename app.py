@@ -220,8 +220,8 @@ with st.container(key="rkheader"):
         loaded = [s for s, v in status.items() if v["exists"]]
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
-        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.1.0"):
-            st.caption("build: **v3.1.0 — Recy upgraded: full-table + formula knowledge, reads images, files change requests as GitHub issues**")
+        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.1.1"):
+            st.caption("build: **v3.1.1 — Recy draws charts (bar/line) of the live summary numbers on request**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())
@@ -267,7 +267,8 @@ with _recy_pop:
             _ans = _assistant.ask(_pend["q"], st.session_state.get("_recy_summaries"),
                                   _hist, app_state=_state,
                                   images=_pend.get("imgs") or None)
-        _hist.append({"role": "assistant", "content": _ans})
+        _txt, _chart = _assistant.extract_chart(_ans)
+        _hist.append({"role": "assistant", "content": _txt, "chart": _chart})
     # fixed-size scrollable log — latest at the bottom, scroll up for older
     with st.container(height=300):
         _h = st.session_state.get("recy_hist", [])
@@ -279,6 +280,13 @@ with _recy_pop:
             for _mime, _bd in _m.get("imgs", []):
                 import base64 as _b64d
                 _msg.image(_b64d.b64decode(_bd))
+            if _m.get("chart"):
+                _cdf = _assistant.chart_frame(_m["chart"], st.session_state.get("_recy_summaries"))
+                if _cdf is not None:
+                    if _m["chart"].get("title"):
+                        _msg.caption(f"📊 {_m['chart']['title']} — drawn from the live summary")
+                    (_msg.line_chart if _m["chart"].get("type") == "line"
+                     else _msg.bar_chart)(_cdf, height=240)
         st.markdown('<span class="recylog-end"></span>', unsafe_allow_html=True)
     with st.form("recy_form", clear_on_submit=True):
         _q = st.text_input("Ask…", label_visibility="collapsed",

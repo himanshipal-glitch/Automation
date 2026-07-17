@@ -146,11 +146,30 @@ checking numbers; the LIVE DATA snapshot gives every metric of every month):
 - Re-Commerce Without-Samsung: identical formulas on the subset whose vendor
   name doesn't start with 'Samsung'; Apr–Jun frozen to signed-off figures.
 
+CHARTS — you can draw charts. When the user asks for a chart/graph/trend (or a
+visual would clearly help), END your answer with EXACTLY one fenced block:
+```recychart
+{"type": "bar", "title": "End Generator — monthly Sales vs Purchases",
+ "vertical": "End Generator", "metrics": ["Sales", "Purchases"]}
+```
+or, to COMPARE verticals on one metric:
+```recychart
+{"type": "line", "title": "Sales by vertical", "verticals": ["AFR", "M4"],
+ "metric": "Sales"}
+```
+Rules: "type" is "bar" or "line". Use the EXACT tab names and Metric row names
+from the LIVE DATA blocks. NEVER put data values in the spec — the app reads
+the real numbers from the on-screen tables and draws them (months on the
+x-axis; FY Total excluded). At most one chart per answer; skip the block
+entirely when no visual is needed.
+
 ABOUT ME (Recy): I answer using this knowledge, the maintainer guide, CLAUDE.md
 and a LIVE snapshot of every vertical's full summary table (all metrics × all
 months), so I can explain and verify calculations against the actual numbers.
 I can READ ATTACHED IMAGES (workbook screenshots, Zoho errors, manual reports)
 and answer questions about them — compare figures, spot differences, read cells.
+I can DRAW CHARTS of the live numbers (see CHARTS above) — but not generate
+pictures/images.
 I CANNOT edit code or data myself, deliberately: this app produces signed-off
 financials, so every change goes through human review. If someone wants a logic
 change, I draft the exact change (what file/rule, what new behaviour) and they
@@ -235,6 +254,83 @@ def file_change_request(title: str, body: str) -> tuple[bool, str]:
         return False, f"GitHub said {r.status_code}: {r.text[:120]}"
     except Exception as e:
         return False, f"Couldn't reach GitHub: {e}"
+
+
+def extract_chart(answer: str) -> tuple[str, dict | None]:
+    """Split the ```recychart {...}``` block off an answer.
+    Returns (display_text, spec | None)."""
+    import re
+    import json
+    m = re.search(r"```recychart\s*(.*?)\s*```", answer, re.S)
+    if not m:
+        return answer, None
+    txt = (answer[:m.start()] + answer[m.end():]).strip()
+    try:
+        spec = json.loads(m.group(1))
+        return txt, (spec if isinstance(spec, dict) else None)
+    except Exception:
+        return txt, None       # malformed spec → still hide the raw block
+
+
+def chart_frame(spec: dict, summaries: dict | None):
+    """Resolve a chart spec into a DataFrame of REAL values pulled from the
+    live summary tables (index = months, columns = series). Recy's spec only
+    NAMES what to plot — the numbers always come from the on-screen data, so
+    a chart can never contain invented figures. Returns None if unresolvable."""
+    import pandas as pd
+    if not spec or not summaries:
+        return None
+
+    def _n(x):
+        return "".join(ch for ch in str(x).lower() if ch.isalnum())
+
+    def _tab(name):
+        for k in summaries:
+            if _n(k) == _n(name):
+                return k
+        for k in summaries:
+            if _n(name) and _n(name) in _n(k):
+                return k
+        return None
+
+    def _row_vals(df, metric, cols):
+        mrow = df[df["Metric"].astype(str).map(_n) == _n(metric)]
+        if mrow.empty:
+            return None
+        return [float(pd.to_numeric(pd.Series([mrow.iloc[0][c]]),
+                                    errors="coerce").fillna(0).iloc[0]) for c in cols]
+
+    verticals = spec.get("verticals") or ([spec["vertical"]] if spec.get("vertical") else [])
+    metrics = spec.get("metrics") or ([spec["metric"]] if spec.get("metric") else [])
+    if not verticals or not metrics:
+        return None
+
+    series: dict[str, list] = {}
+    months: list | None = None
+    if len(verticals) > 1:                       # compare verticals on ONE metric
+        for vn in verticals[:6]:
+            k = _tab(vn)
+            df = summaries.get(k) if k else None
+            if df is None or "Metric" not in df.columns:
+                continue
+            cols = [c for c in df.columns if c not in ("Metric", "FY Total")]
+            vals = _row_vals(df, metrics[0], cols)
+            if vals is not None:
+                months = months or cols
+                series[k] = vals[:len(months)]
+    else:                                        # one vertical, up to 4 metrics
+        k = _tab(verticals[0])
+        df = summaries.get(k) if k else None
+        if df is None or "Metric" not in df.columns:
+            return None
+        months = [c for c in df.columns if c not in ("Metric", "FY Total")]
+        for metric in metrics[:4]:
+            vals = _row_vals(df, metric, months)
+            if vals is not None:
+                series[str(metric)] = vals
+    if not series or not months:
+        return None
+    return pd.DataFrame(series, index=pd.Index(months, name="Month"))
 
 
 def get_api_key() -> str | None:

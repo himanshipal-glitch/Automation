@@ -117,7 +117,9 @@ def _ib_warehouse_set() -> set:
 
 
 CUSTOM_DUTY_COST_SOURCE = "Custom Duty (manual entry)"
+OPCOST_COST_SOURCE = "Operational Cost (manual entry)"
 CUSTOM_DUTY_VENDOR = "BLACK GOLD RECYCLING PRIVATE LIMITED"
+CUSTOM_DUTY_VENDOR_GST = "24AAMCB5608A1Z3"
 
 
 def _custom_duty_mask(df: pd.DataFrame) -> pd.Series:
@@ -129,6 +131,17 @@ def _custom_duty_mask(df: pd.DataFrame) -> pd.Series:
     if cs_col is None:
         return pd.Series(False, index=df.index)
     return df[cs_col].astype(str).str.strip().eq(CUSTOM_DUTY_COST_SOURCE)
+
+
+def _manual_entry_mask(df: pd.DataFrame) -> pd.Series:
+    """Custom Duty bills + manual Operational Cost line items — the Enterprise
+    manual entries that must always route to the B2B (Enterprise) side."""
+    cs_col = next((c for c in df.columns
+                   if "".join(ch for ch in str(c).lower() if ch.isalnum()) == "costsource"), None)
+    if cs_col is None:
+        return pd.Series(False, index=df.index)
+    return df[cs_col].astype(str).str.strip().isin(
+        [CUSTOM_DUTY_COST_SOURCE, OPCOST_COST_SOURCE])
 
 
 def _ib_split_masks(mask: pd.Series, ship: pd.Series,
@@ -144,11 +157,69 @@ def _ib_split_masks(mask: pd.Series, ship: pd.Series,
     wh  = mask & (~_sh.str.startswith("SH") | _sh.str.contains("MPIB", na=False))
     if df is not None:
         b2b = b2b & _ib_has_vendor_invoice(df, ship)
-        _cd = mask & _custom_duty_mask(df)
+        _cd = mask & _manual_entry_mask(df)
         if _cd.any():
             b2b = b2b | _cd
             wh  = wh & ~_cd
     return b2b, wh
+
+
+def inject_enterprise_opcost(profit_df: pd.DataFrame, oc: dict) -> pd.DataFrame:
+    """Append the user-entered Enterprise Operational Cost months as Details
+    line items, in the manual's format: Shipment/Material "Service Charges
+    (Mon-YY)", Black Gold vendor, the amount in the Operational Cost column
+    (nothing in Purchase Price — the summary's op-cost row is driven by the
+    same user override, so this is display/audit only). Value and month come
+    entirely from the user's input. `oc` = {"Mmm-yy": amount}."""
+    if not oc or profit_df is None or profit_df.empty:
+        return profit_df
+
+    def _named(name):
+        key = "".join(ch for ch in name.lower() if ch.isalnum())
+        return next((c for c in profit_df.columns
+                     if "".join(ch for ch in str(c).lower() if ch.isalnum()) == key), None)
+
+    cols = list(profit_df.columns)
+    rows = []
+    for mon, amt in oc.items():
+        mdt = pd.to_datetime(str(mon).strip(), format="%b-%y", errors="coerce")
+        if pd.isna(mdt):
+            continue
+        mend = mdt + pd.offsets.MonthEnd(0)                    # month-END date
+        fy_apr1 = pd.Timestamp(mend.year if mend.month >= 4 else mend.year - 1, 4, 1)
+        label = "Service Charges (" + mdt.strftime("%b-%y") + ")"
+        r = {c: None for c in cols}
+        if len(cols) > 86:
+            r[cols[0]]  = "Q" + str((mend.month - 4) % 12 // 3 + 1)     # fiscal quarter
+            r[cols[1]]  = mdt.strftime("%b-%y")                         # Month
+            r[cols[2]]  = mend.strftime("%Y-%m-%d")                     # Date = month end
+            r[cols[3]]  = label                                         # Shipment ID
+            r[cols[4]]  = CUSTOM_DUTY_VENDOR                            # Supplier Name
+            r[cols[5]]  = CUSTOM_DUTY_VENDOR_GST                        # GST Reg No.
+            r[cols[12]] = label                                         # Material
+            r[cols[13]] = 1                                             # Qty (Kg)
+            r[cols[17]] = 1                                             # Net Qty
+            r[cols[27]] = float(amt)                                    # Operational Cost
+            r[cols[38]] = mend.strftime("%Y-%m-%d")                     # Inv. Date
+            r[cols[49]] = "FALSE"                                       # Qty Check
+            r[cols[53]] = "Regular"                                     # Return Type
+            r[cols[78]] = "Service Charges"                             # Material-Short Form
+            r[cols[83]] = int((mend - fy_apr1).days // 7) + 1           # Week No:
+            r[cols[84]] = "Marketplace Purchases (IB)"                  # Category (Material)
+            r[cols[85]] = "Institutional Business"                      # -> Enterprise (forced B2B)
+            r[cols[86]] = "BG AHD"                                      # POC Name
+        for name, val in (("Bill Branch", "Telangana - HO"),
+                          ("Inv Branch", "Telangana - HO"),
+                          ("Vendor PAN No", "AAMCB5608A"),
+                          ("Cost Source", OPCOST_COST_SOURCE),
+                          ("Resale Note", "Operational Cost — manual monthly entry (drives the summary's Op-Cost row)")):
+            c = _named(name)
+            if c is not None:
+                r[c] = val
+        rows.append(r)
+    if not rows:
+        return profit_df
+    return pd.concat([profit_df, pd.DataFrame(rows, columns=cols)], ignore_index=True)
 
 
 def inject_custom_duty(profit_df: pd.DataFrame, cd: pd.DataFrame) -> pd.DataFrame:
@@ -1536,6 +1607,19 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
             _cds = None
         if _cds is not None and len(_cds) and not _custom_duty_mask(_live_src).any():
             _live_src = inject_custom_duty(_live_src, _cds)
+        # Enterprise Operational Cost overrides -> 'Service Charges (Mon-YY)'
+        # line items (display/audit; the summary row uses the same override).
+        try:
+            _ocm2 = _dbm.load_enterprise_opcost() if _dbm is not None else None
+        except Exception:
+            _ocm2 = None
+        if _ocm2:
+            _cs_probe = next((c for c in _live_src.columns
+                              if "".join(ch for ch in str(c).lower() if ch.isalnum()) == "costsource"), None)
+            _already = (_cs_probe is not None and _live_src[_cs_probe].astype(str)
+                        .str.strip().eq(OPCOST_COST_SOURCE).any())
+            if not _already:
+                _live_src = inject_enterprise_opcost(_live_src, _ocm2)
         _tgt = list(_live_src.columns)
 
         def _nrm(s):

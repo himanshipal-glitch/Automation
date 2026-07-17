@@ -672,7 +672,14 @@ def _summary_block(w: pd.DataFrame, recv: float, pay: float, wd: float = 30,
     gross_sales = float(w["Amount_sales"].sum())
     # Net Revenue = gross sales − credit notes (actual + provisions)
     cn_val = float(w["Actaul_CN"].sum()) + float(w["Provision_for_CN"].sum())
-    sales = gross_sales - cn_val
+    # Other Income = the Finance Up-Charge invoice items in this slice. Per the
+    # manual's convention they are EXCLUDED from Sales and shown on their own
+    # row — so every sales-dependent figure (GM, NM, their %, Revenue/Kg, CN%,
+    # DSO) uses sales WITHOUT them.
+    _matn = w["Material"].astype(str).str.lower().str.replace(r"[^a-z]", "", regex=True)
+    oi = float(pd.to_numeric(w.loc[_matn.str.startswith("financeup"), "Amount_sales"],
+                             errors="coerce").fillna(0).sum())
+    sales = gross_sales - cn_val - oi
     # Net Purchases = gross purchase − debit notes (actual + provisions). Vendor
     # DNs (incl. full-reversal returns to seller) reduce the purchase cost, the
     # same way the manual nets DN out of its Purchases line.
@@ -697,12 +704,6 @@ def _summary_block(w: pd.DataFrame, recv: float, pay: float, wd: float = 30,
     tc    = float(w["Logistics_Cost"].sum())
     oc    = oc_override if oc_override is not None else float(w["Operational_Cost"].sum())
     nm    = gm - tc - oc
-    # Other Income = the Finance Up-Charge invoice items in this slice. They are
-    # already part of Sales — this row only SURFACES them (per the manual);
-    # no margin math uses it.
-    _matn = w["Material"].astype(str).str.lower().str.replace(r"[^a-z]", "", regex=True)
-    oi = float(pd.to_numeric(w.loc[_matn.str.startswith("financeup"), "Amount_sales"],
-                             errors="coerce").fillna(0).sum())
 
     def _nz(x, d):  # safe divide
         return round(x / d, 4) if d else 0.0

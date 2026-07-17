@@ -223,8 +223,8 @@ with st.container(key="rkheader"):
         loaded = [s for s, v in status.items() if v["exists"]]
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
-        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.1.4"):
-            st.caption("build: **v3.1.4 — new Other Income summary row (Finance Up-Charge items; frozen months from the manual files)**")
+        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.1.5"):
+            st.caption("build: **v3.1.5 — Other Income items excluded from Sales (and all sales-based rows), matching the manual**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())

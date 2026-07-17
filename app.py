@@ -223,8 +223,8 @@ with st.container(key="rkheader"):
         loaded = [s for s, v in status.items() if v["exists"]]
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
-        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.1.7"):
-            st.caption("build: **v3.1.7 — Operational Cost line items in their OWN table below Details (like Finance Up Charge)**")
+        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.1.8"):
+            st.caption("build: **v3.1.8 — Op-Cost/Custom-Duty saves: any month format accepted, rejected rows called out, sync status shown**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())
@@ -1542,6 +1542,20 @@ elif page == "Summary Report":
             "survive app restarts/redeploys — without them they live only on this "
             "container's disk and reset when the app reboots.")
 
+        def _save_feedback(n: int, what: str) -> str:
+            """Build the post-save message: stored count + any REJECTED rows +
+            whether the values are durably synced to GitHub."""
+            msg = f"Stored {n} {what}."
+            if db.LAST_SAVE_DROPPED:
+                msg += (" ⚠ REJECTED: " + "; ".join(db.LAST_SAVE_DROPPED)
+                        + " — the month must be a real month (any format works: Jul-26, July 2026, 07-26…).")
+            if db.LAST_SYNC_OK is True:
+                msg += " 🔒 Synced to GitHub — survives restarts."
+            elif db.LAST_SYNC_OK is False:
+                msg += (" ⚠ Saved on this server only — it will RESET when the app "
+                        "restarts, until the [github] secrets (token+repo) are added.")
+            return msg
+
         _cd_store = db.load_custom_duty()
         with st.expander(f"🛃 Enterprise — Custom Duty bills ({len(_cd_store)} stored)"):
             st.caption("Custom-duty line items — **no bill/invoice in Zoho and no Shipment "
@@ -1556,9 +1570,12 @@ elif page == "Summary Report":
                  "Amount": pd.Series(dtype="float")})
             _cd_res = st.data_editor(_cd_seed, num_rows="dynamic",
                                      use_container_width=True, key="cd_editor")
+            _m0 = st.session_state.pop("cd_save_msg", None)
+            if _m0:
+                (st.warning if "⚠" in _m0 else st.success)(_m0)
             if st.button("💾 Save Custom Duty bills", key="cd_save"):
                 _n = db.save_custom_duty(_cd_res)
-                st.success(f"Stored {_n} Custom Duty bill(s).")
+                st.session_state["cd_save_msg"] = _save_feedback(_n, "Custom Duty bill(s)")
                 st.rerun()
         if not _cd_store.empty:
             profit_df = reports.inject_custom_duty(profit_df, _cd_store)
@@ -1576,9 +1593,12 @@ elif page == "Summary Report":
                                       "Operational Cost": pd.Series(dtype="float")}))
             _oc_res = st.data_editor(_oc_seed, num_rows="dynamic",
                                      use_container_width=True, key="ent_oc_editor")
+            _m1 = st.session_state.pop("oc_save_msg", None)
+            if _m1:
+                (st.warning if "⚠" in _m1 else st.success)(_m1)
             if st.button("💾 Save Operational Cost", key="ent_oc_save"):
                 _n = db.save_enterprise_opcost(_oc_res)
-                st.success(f"Stored operational cost for {_n} month(s).")
+                st.session_state["oc_save_msg"] = _save_feedback(_n, "operational-cost month(s)")
                 st.rerun()
 
         def _apply_ent_opcost(_s):

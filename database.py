@@ -335,19 +335,48 @@ def _load_small(path) -> pd.DataFrame:
     return pd.DataFrame()
 
 
+# rows the last save REJECTED (for loud UI feedback — silent drops made it
+# look like "the app can't store the data" when a month was typed as July-26)
+LAST_SAVE_DROPPED: list = []
+
+
+def _parse_month_series(mon: pd.Series) -> pd.Series:
+    """FORGIVING month parser → canonical 'Mmm-yy'. Accepts Jul-26, july-26,
+    July 26, Jul 2026, July 2026, 07-26, 2026-07, 07/2026 … NaT when hopeless."""
+    s = mon.astype(str).str.strip().str.replace(r"[./]", "-", regex=True)
+    out = pd.to_datetime(s, format="%b-%y", errors="coerce")
+    for fmt in ("%B-%y", "%b-%Y", "%B-%Y", "%b %y", "%B %y", "%b %Y", "%B %Y",
+                "%m-%y", "%m-%Y", "%Y-%m"):
+        left = out.isna()
+        if not left.any():
+            break
+        out[left] = pd.to_datetime(s[left], format=fmt, errors="coerce")
+    left = out.isna()
+    if left.any():   # last resort: pandas' general parser
+        out[left] = pd.to_datetime(s[left], errors="coerce", dayfirst=True)
+    return out
+
+
 def save_custom_duty(df: pd.DataFrame) -> int:
     """Full snapshot — replaces. Columns: Month (mmm-yy), Supplier Name, Amount.
     Custom-duty line items carry NO shipment id (same as the manual report).
-    Keeps only rows with a parseable month and a non-zero amount."""
+    Keeps rows with a parseable month and a non-zero amount; rejected rows are
+    reported via LAST_SAVE_DROPPED (never dropped silently)."""
+    global LAST_SAVE_DROPPED
+    LAST_SAVE_DROPPED = []
     if df is None:
         return 0
     d = df.copy()
     d.columns = [str(c) for c in d.columns]
-    mon = d.iloc[:, 0].astype(str).str.strip()
+    mdt = _parse_month_series(d.iloc[:, 0])
     amt = pd.to_numeric(d.iloc[:, -1], errors="coerce")
-    ok = pd.to_datetime(mon, format="%b-%y", errors="coerce").notna() \
-         & amt.notna() & amt.ne(0)
+    blank = d.iloc[:, 0].astype(str).str.strip().isin(["", "nan", "None"]) & amt.isna()
+    ok = mdt.notna() & amt.notna() & amt.ne(0)
+    LAST_SAVE_DROPPED = [f"'{d.iloc[i, 0]}' / amount '{d.iloc[i, -1]}'"
+                         for i in d.index[~ok & ~blank]]
     d = d[ok].reset_index(drop=True)
+    if len(d):
+        d.isetitem(0, mdt[ok].dt.strftime("%b-%y").values)   # canonical Mmm-yy
     return _save_small(d, CUSTOM_DUTY_PATH,
                        sync_msg="Update Enterprise Custom Duty bills (app entry)")
 
@@ -357,14 +386,24 @@ def load_custom_duty() -> pd.DataFrame:
 
 
 def save_enterprise_opcost(df: pd.DataFrame) -> int:
-    """Full snapshot — replaces. Rows: Month (mmm-yy) + Amount."""
+    """Full snapshot — replaces. Rows: Month (mmm-yy) + Amount. Months parse
+    forgivingly (July-26, 07-26 … → 'Mmm-yy'); rejected rows are reported via
+    LAST_SAVE_DROPPED (never dropped silently)."""
+    global LAST_SAVE_DROPPED
+    LAST_SAVE_DROPPED = []
     if df is None:
         return 0
     d = df.copy()
-    mon = d.iloc[:, 0].astype(str).str.strip()
+    mdt = _parse_month_series(d.iloc[:, 0])
     amt = pd.to_numeric(d.iloc[:, 1], errors="coerce")
-    ok = pd.to_datetime(mon, format="%b-%y", errors="coerce").notna() & amt.notna()
+    blank = d.iloc[:, 0].astype(str).str.strip().isin(["", "nan", "None"]) & amt.isna()
+    ok = mdt.notna() & amt.notna()
+    LAST_SAVE_DROPPED = [f"'{d.iloc[i, 0]}' / amount '{d.iloc[i, 1]}'"
+                         for i in d.index[~ok & ~blank]]
     d = d[ok].reset_index(drop=True)
+    if len(d):
+        d.isetitem(0, mdt[ok].dt.strftime("%b-%y").values)   # canonical Mmm-yy
+        d = d.drop_duplicates(subset=[d.columns[0]], keep="last").reset_index(drop=True)
     return _save_small(d, ENT_OPCOST_PATH,
                        sync_msg="Update Enterprise Operational Cost overrides (app entry)")
 

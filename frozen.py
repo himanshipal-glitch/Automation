@@ -55,19 +55,20 @@ def _apply_tab_aliases(d: dict) -> None:
                 d.setdefault(old, d[canon])
 
 # money rows are rounded to 0, ratios/per-kg to 2, counts are ints, %-rows scale ×100
-# Row indexes follow reports.SUMMARY_METRICS (28 rows):
-# …14=Full Rejection, 15=Receivables, 16=FY27 R, 17=Old R, 18=DSO,
-# 19=Payable, 20=FY27 P, 21=Old P, 22=DPO, 23=WC Days, 24=CN val, 25=CN%,
-# 26=DN val, 27=DN%
-_MONEY   = {0, 1, 2, 3, 5, 6, 24, 26}          # (0=Qty rounds to 2, handled below)
-_RATIO2  = {4, 7, 8, 9, 10, 25, 27}
-_COUNTS  = {11, 12, 13}
-_DAYS    = {18, 22, 23}
-_BALANCE = {15, 19}
+# Row indexes follow reports.SUMMARY_METRICS (29 rows):
+# …8=Other Income, 9=Rev/Kg, 10=Pur/Kg, 11=Transport/Kg, 12-14=counts,
+# 15=Full Rejection, 16=Receivables, 17=FY27 R, 18=Old R, 19=DSO,
+# 20=Payable, 21=FY27 P, 22=Old P, 23=DPO, 24=WC Days, 25=CN val, 26=CN%,
+# 27=DN val, 28=DN%
+_MONEY   = {0, 1, 2, 3, 5, 6, 8, 25, 27}       # (0=Qty rounds to 2, handled below)
+_RATIO2  = {4, 7, 9, 10, 11, 26, 28}
+_COUNTS  = {12, 13, 14}
+_DAYS    = {19, 23, 24}
+_BALANCE = {16, 20}
 # FY balances/day rows (incl. the FY27/Old splits) stay live, never summed:
-_KEEP_LIVE_FY = {14, 15, 16, 17, 18, 19, 20, 21, 22, 23}
+_KEEP_LIVE_FY = {15, 16, 17, 18, 19, 20, 21, 22, 23, 24}
 # additive rows summed for the FY total:
-_ADDITIVE_FY = {0, 1, 2, 3, 5, 6, 11, 12, 13, 24, 26}
+_ADDITIVE_FY = {0, 1, 2, 3, 5, 6, 8, 12, 13, 14, 25, 27}
 
 
 def _mkey(s) -> str:
@@ -92,21 +93,22 @@ def _metric_idx(label: str):
     if n == "operationalcost":              return (5, 1)
     if n == "netmargin%":                   return (7, 100)
     if n == "netmargin":                    return (6, 1)
-    if n in ("revenueperunit", "revenueperkg"):        return (8, 1)
-    if n in ("purchasecostperunit", "purchasecostperkg"): return (9, 1)
-    if n.startswith("nooftransactions"):    return (11, 1)
-    if n.startswith("noofsellers"):         return (12, 1)
-    if n.startswith("noofbuyers"):          return (13, 1)
-    if n == "fullrejection":                return (14, 1)
-    if n.startswith("receivable"):          return (15, 1)   # incl. "Receivable (Exl Legacy)"
-    if n.startswith("dso"):                 return (18, 1)
-    if n in ("payable", "payables"):        return (19, 1)
-    if n.startswith("dpo"):                 return (22, 1)
-    if n == "workingcapitaldays":           return (23, 1)
-    if "creditnotes" in n and "%" in n:     return (25, 100)
-    if "creditnotes" in n and "value" in n: return (24, 1)
-    if "debitnotes" in n and "%" in n:      return (27, 100)
-    if "debitnotes" in n and "value" in n:  return (26, 1)
+    if n == "otherincome":                  return (8, 1)
+    if n in ("revenueperunit", "revenueperkg"):        return (9, 1)
+    if n in ("purchasecostperunit", "purchasecostperkg"): return (10, 1)
+    if n.startswith("nooftransactions"):    return (12, 1)
+    if n.startswith("noofsellers"):         return (13, 1)
+    if n.startswith("noofbuyers"):          return (14, 1)
+    if n == "fullrejection":                return (15, 1)
+    if n.startswith("receivable"):          return (16, 1)   # incl. "Receivable (Exl Legacy)"
+    if n.startswith("dso"):                 return (19, 1)
+    if n in ("payable", "payables"):        return (20, 1)
+    if n.startswith("dpo"):                 return (23, 1)
+    if n == "workingcapitaldays":           return (24, 1)
+    if "creditnotes" in n and "%" in n:     return (26, 100)
+    if "creditnotes" in n and "value" in n: return (25, 1)
+    if "debitnotes" in n and "%" in n:      return (28, 100)
+    if "debitnotes" in n and "value" in n:  return (27, 1)
     return None
 
 
@@ -198,12 +200,12 @@ def parse_summary(path: str, sheet_candidates: list[str]) -> dict:
     for m in month_cols.values():
         q = (qty.get(m) or 0.0) * (1000 if qty_is_mt else 1)
         c = out[m]
-        if 1 in c and 8 not in c:
-            c[8] = round(c[1] / q, 2) if q else 0.0
-        if 2 in c and 9 not in c:
-            c[9] = round(c[2] / q, 2) if q else 0.0
-        if tc_abs[m] is not None and 10 not in c:
-            c[10] = round(tc_abs[m] / q, 2) if q else 0.0
+        if 1 in c and 9 not in c:
+            c[9] = round(c[1] / q, 2) if q else 0.0
+        if 2 in c and 10 not in c:
+            c[10] = round(c[2] / q, 2) if q else 0.0
+        if tc_abs[m] is not None and 11 not in c:
+            c[11] = round(tc_abs[m] / q, 2) if q else 0.0
     return out
 
 
@@ -290,18 +292,18 @@ def _aggregate_all(per: dict) -> dict:
             got = True
             for i in (_ADDITIVE_FY | _BALANCE):
                 add[i] += float(c.get(i, 0) or 0)
-            tc_abs += float(c.get(10, 0) or 0) * float(c.get(0, 0) or 0)
+            tc_abs += float(c.get(11, 0) or 0) * float(c.get(0, 0) or 0)
         if not got:
             continue
         qty, sales, pur = add[0], add[1], add[2]
         cell = dict(add)
         cell[4]  = round(100 * add[3] / sales, 2) if sales else 0.0
         cell[7]  = round(100 * add[6] / sales, 2) if sales else 0.0
-        cell[8]  = round(sales / qty, 2) if qty else 0.0
-        cell[9]  = round(pur / qty, 2) if qty else 0.0
-        cell[10] = round(tc_abs / qty, 2) if qty else 0.0
-        cell[25] = round(100 * add[24] / sales, 2) if sales else 0.0
-        cell[27] = round(100 * add[26] / pur, 2) if pur else 0.0
+        cell[9]  = round(sales / qty, 2) if qty else 0.0
+        cell[10] = round(pur / qty, 2) if qty else 0.0
+        cell[11] = round(tc_abs / qty, 2) if qty else 0.0
+        cell[26] = round(100 * add[25] / sales, 2) if sales else 0.0
+        cell[28] = round(100 * add[27] / pur, 2) if pur else 0.0
         allc[m] = cell
     return allc
 
@@ -356,13 +358,13 @@ def _rederive_splits(df: pd.DataFrame) -> None:
     """Re-split the FY-27/Old rows AFTER the frozen overlay rewrites the parent
     Receivable/Payable — keep the FY-vs-old RATIO but rescale to the (frozen)
     parent, so FY27 + Old always equals the shown parent and neither goes
-    negative. Rows: 15 Recv, 16 FY27 R, 17 Old R · 19 Pay, 20 FY27 P, 21 Old P."""
-    if len(df) <= 21:
+    negative. Rows: 16 Recv, 17 FY27 R, 18 Old R · 20 Pay, 21 FY27 P, 22 Old P."""
+    if len(df) <= 22:
         return
     def g(i, c):
         return float(pd.to_numeric(pd.Series([df.iat[i, c]]), errors="coerce").fillna(0).iloc[0])
     for c in range(1, df.shape[1]):
-        for parent, i27, iold in ((15, 16, 17), (19, 20, 21)):
+        for parent, i27, iold in ((16, 17, 18), (20, 21, 22)):
             p = g(parent, c)
             tot = g(i27, c) + g(iold, c)
             r = (g(i27, c) / tot) if tot else 0.0     # FY-dated share, preserved
@@ -375,20 +377,20 @@ def _rederive_splits(df: pd.DataFrame) -> None:
 # by the finance team (Jul-2026). Keys = SUMMARY_METRICS row index.
 RC_NOSAMSUNG_FROZEN: dict[str, dict[int, float]] = {
     "Apr-26": {0: 89,  1: 134576,  2: 132764,  3: 1812,   4: 1.35,   5: 199520,
-               6: -197708, 7: -146.91, 8: 1.51,  9: 1.49,  10: 0,
-               11: 2,  12: 1, 13: 1, 14: 0,
-               15: 57626019, 18: 10887, 19: -2192780, 22: -420, 23: 11306,
-               24: 0, 25: 0.0, 26: 0, 27: 0.0},
+               6: -197708, 7: -146.91, 8: 0, 9: 1.51,  10: 1.49,  11: 0,
+               12: 2,  13: 1, 14: 1, 15: 0,
+               16: 57626019, 19: 10887, 20: -2192780, 23: -420, 24: 11306,
+               25: 0, 26: 0.0, 27: 0, 28: 0.0},
     "May-26": {0: 330, 1: 983715,  2: 960432,  3: 23283,  4: 2.37,   5: -199520,
-               6: 222803,  7: 22.65,  8: 2.98,  9: 2.91,  10: 0,
-               11: 8,  12: 1, 13: 2, 14: 0,
-               15: 48789620, 18: 1303, 19: -3812553, 22: -104, 23: 1407,
-               24: 0, 25: 0.0, 26: 0, 27: 0.0},
+               6: 222803,  7: 22.65,  8: 0, 9: 2.98,  10: 2.91,  11: 0,
+               12: 8,  13: 1, 14: 2, 15: 0,
+               16: 48789620, 19: 1303, 20: -3812553, 23: -104, 24: 1407,
+               25: 0, 26: 0.0, 27: 0, 28: 0.0},
     "Jun-26": {0: 434, 1: 6051182, 2: 5578660, 3: 472522, 4: 7.81,   5: 0,
-               6: 472522,  7: 7.81,   8: 13.94, 9: 12.85, 10: 0,
-               11: 33, 12: 1, 13: 5, 14: 0,
-               15: 53822926, 18: 226, 19: -3063235, 22: -14, 23: 240,
-               24: 0, 25: 0.0, 26: 0, 27: 0.0},
+               6: 472522,  7: 7.81,   8: 0, 9: 13.94, 10: 12.85, 11: 0,
+               12: 33, 13: 1, 14: 5, 15: 0,
+               16: 53822926, 19: 226, 20: -3063235, 23: -14, 24: 240,
+               25: 0, 26: 0.0, 27: 0, 28: 0.0},
 }
 
 
@@ -499,8 +501,8 @@ def _recompute_fy(df: pd.DataFrame, open_month: str | None, tab: str = "") -> No
         # live open-month values captured BEFORE overwriting (needed to re-derive)
         _S0, _P0 = g(1, open_month), g(2, open_month)          # live Sales / Purchases
         _gm0, _nm0, _ocst = g(3, open_month), g(6, open_month), g(5, open_month)
-        _dso0, _dpo0 = g(18, open_month), g(22, open_month)
-        _cnv, _dnv = g(24, open_month), g(26, open_month)      # CN / DN value (kept live)
+        _dso0, _dpo0 = g(19, open_month), g(23, open_month)
+        _cnv, _dnv = g(25, open_month), g(27, open_month)      # CN / DN value (kept live)
         _tc_abs = _gm0 - _nm0 - _ocst                          # absolute transport (kept live)
 
         def _fyv(i):
@@ -518,36 +520,37 @@ def _recompute_fy(df: pd.DataFrame, open_month: str | None, tab: str = "") -> No
         df.iat[6, _oc]  = round(_nm_r, 0)                        # Net Margin
         df.iat[4, _oc]  = round(100 * _gm_r / _Sr, 2) if _Sr else 0.0   # GM %
         df.iat[7, _oc]  = round(100 * _nm_r / _Sr, 2) if _Sr else 0.0   # NM %
-        df.iat[8, _oc]  = round(_Sr / _qkg, 2) if _qkg else 0.0         # Revenue / Kg
-        df.iat[9, _oc]  = round(_Pr / _qkg, 2) if _qkg else 0.0         # Purchase Cost / Kg
-        df.iat[10, _oc] = round(_tc_abs / _qkg, 2) if _qkg else 0.0     # Transport / Kg
-        df.iat[25, _oc] = round(100 * _cnv / _Sr, 2) if _Sr else 0.0    # CN % to Revenue
-        df.iat[27, _oc] = round(100 * _dnv / _Pr, 2) if _Pr else 0.0    # DN % to Purchase
+        df.iat[9, _oc]  = round(_Sr / _qkg, 2) if _qkg else 0.0         # Revenue / Kg
+        df.iat[10, _oc] = round(_Pr / _qkg, 2) if _qkg else 0.0         # Purchase Cost / Kg
+        df.iat[11, _oc] = round(_tc_abs / _qkg, 2) if _qkg else 0.0     # Transport / Kg
+        df.iat[26, _oc] = round(100 * _cnv / _Sr, 2) if _Sr else 0.0    # CN % to Revenue
+        df.iat[28, _oc] = round(100 * _dnv / _Pr, 2) if _Pr else 0.0    # DN % to Purchase
         # DSO/DPO scale inversely with Sales/Purchases (Receivable, Payable, days
         # are unchanged), so DSO_resid = DSO_live × Sales_live / Sales_resid.
         _dso_r = round(_dso0 * _S0 / _Sr, 0) if (_Sr and _S0) else _dso0
         _dpo_r = round(_dpo0 * _P0 / _Pr, 0) if (_Pr and _P0) else _dpo0
-        df.iat[18, _oc], df.iat[22, _oc] = _dso_r, _dpo_r
-        df.iat[23, _oc] = round(_dso_r - _dpo_r, 0)             # Working Capital Days
+        df.iat[19, _oc], df.iat[23, _oc] = _dso_r, _dpo_r
+        df.iat[24, _oc] = round(_dso_r - _dpo_r, 0)             # Working Capital Days
 
     qty, sales, pur = S(0), S(1), S(2)
     gm, oc, nm = S(3), S(5), S(6)
-    cnv, dnv = S(24), S(26)
+    cnv, dnv = S(25), S(27)
     # qty is displayed in MT for weight verticals — per-kg maths needs Kg
     qkg = qty * (1 if tab in UNIT_TABS else 1000)
-    tc_abs = sum(g(10, m) * g(0, m) * (1 if tab in UNIT_TABS else 1000) for m in use)
+    tc_abs = sum(g(11, m) * g(0, m) * (1 if tab in UNIT_TABS else 1000) for m in use)
 
     fy = {
         0: round(qty, 2), 1: round(sales, 0), 2: round(pur, 0), 3: round(gm, 0),
-        5: round(oc, 0), 6: round(nm, 0), 24: round(cnv, 0), 26: round(dnv, 0),
-        11: int(round(S(11))), 12: int(round(S(12))), 13: int(round(S(13))),
+        5: round(oc, 0), 6: round(nm, 0), 8: round(S(8), 0),
+        25: round(cnv, 0), 27: round(dnv, 0),
+        12: int(round(S(12))), 13: int(round(S(13))), 14: int(round(S(14))),
         4: round(100 * gm / sales, 2) if sales else 0.0,
         7: round(100 * nm / sales, 2) if sales else 0.0,
-        8: round(sales / qkg, 2) if qkg else 0.0,
-        9: round(pur / qkg, 2) if qkg else 0.0,
-        10: round(tc_abs / qkg, 2) if qkg else 0.0,
-        25: round(100 * cnv / sales, 2) if sales else 0.0,
-        27: round(100 * dnv / pur, 2) if pur else 0.0,
+        9: round(sales / qkg, 2) if qkg else 0.0,
+        10: round(pur / qkg, 2) if qkg else 0.0,
+        11: round(tc_abs / qkg, 2) if qkg else 0.0,
+        26: round(100 * cnv / sales, 2) if sales else 0.0,
+        28: round(100 * dnv / pur, 2) if pur else 0.0,
     }
     for idx, val in fy.items():
         if idx not in _KEEP_LIVE_FY and 0 <= idx < len(df):

@@ -589,6 +589,7 @@ SUMMARY_METRICS = [
     "Operational Cost",
     "Net Margin",
     "Net Margin (%)",
+    "Other Income",    # = the Finance Up-Charge invoice items (also inside Sales)
     "Revenue Per Kg",
     "Purchase Cost Per Kg",
     "Transportation Charges Per Kg",
@@ -696,6 +697,12 @@ def _summary_block(w: pd.DataFrame, recv: float, pay: float, wd: float = 30,
     tc    = float(w["Logistics_Cost"].sum())
     oc    = oc_override if oc_override is not None else float(w["Operational_Cost"].sum())
     nm    = gm - tc - oc
+    # Other Income = the Finance Up-Charge invoice items in this slice. They are
+    # already part of Sales — this row only SURFACES them (per the manual);
+    # no margin math uses it.
+    _matn = w["Material"].astype(str).str.lower().str.replace(r"[^a-z]", "", regex=True)
+    oi = float(pd.to_numeric(w.loc[_matn.str.startswith("financeup"), "Amount_sales"],
+                             errors="coerce").fillna(0).sum())
 
     def _nz(x, d):  # safe divide
         return round(x / d, 4) if d else 0.0
@@ -724,6 +731,7 @@ def _summary_block(w: pd.DataFrame, recv: float, pay: float, wd: float = 30,
         round(oc, 0),
         round(nm, 0),
         round(_nz(nm, sales) * 100, 2),
+        round(oi, 0),
         round(_nz(sales, qty), 2),
         round(_nz(pur, qty), 2),
         round(_nz(tc, qty), 2),
@@ -832,11 +840,11 @@ def summary_report(profit_df: pd.DataFrame,
         # bifurcation rows, slotted under their parents (FY27 + Old = parent)
         _f27r, _oldr = _split(ar_df, _rv, m)
         _f27p, _oldp = _split(ap_df, _pv, m)
-        data[m] = (_blk[:16]
+        data[m] = (_blk[:17]
                    + [_f27r, _oldr]
-                   + _blk[16:18]
+                   + _blk[17:19]
                    + [_f27p, _oldp]
-                   + _blk[18:])
+                   + _blk[19:])
 
     # FY working days = total days from FY start to the global cutoff (not summed)
     fy_wd = int((end_dt - fy_start).days) + 1 if (pd.notna(end_dt) and fy_start is not None) else 30
@@ -850,11 +858,11 @@ def summary_report(profit_df: pd.DataFrame,
     _pv_fy = pay_override if pay_override is not None else _bal_sum(ap_df, None, fy_start)
     _f27r_fy, _oldr_fy = _split(ar_df, _rv_fy, None)
     _f27p_fy, _oldp_fy = _split(ap_df, _pv_fy, None)
-    data["FY Total"] = (_fyb[:16]
+    data["FY Total"] = (_fyb[:17]
                         + [_f27r_fy, _oldr_fy]
-                        + _fyb[16:18]
+                        + _fyb[17:19]
                         + [_f27p_fy, _oldp_fy]
-                        + _fyb[18:])
+                        + _fyb[19:])
 
     # Force the open month (last_month) QTY, SALES, and PURCHASES to be the balancing
     # figure between the FY Total and the historical (frozen) months.
@@ -886,9 +894,9 @@ def summary_report(profit_df: pd.DataFrame,
         data[last_month][6] = round(nm, 0)
         data[last_month][7] = round((nm / new_last_sales * 100), 2) if new_last_sales else 0.0
         
-        data[last_month][8] = round(new_last_sales / new_last_qty, 2) if new_last_qty else 0.0
-        data[last_month][9] = round(new_last_pur / new_last_qty, 2) if new_last_qty else 0.0
-        data[last_month][10] = round(tc / new_last_qty, 2) if new_last_qty else 0.0
+        data[last_month][9] = round(new_last_sales / new_last_qty, 2) if new_last_qty else 0.0
+        data[last_month][10] = round(new_last_pur / new_last_qty, 2) if new_last_qty else 0.0
+        data[last_month][11] = round(tc / new_last_qty, 2) if new_last_qty else 0.0
 
     return pd.DataFrame(data)
 
@@ -1208,7 +1216,7 @@ def top_materials(profit_df: pd.DataFrame, tab: str, n: int = 5):
 # Summary row positions (0-indexed into SUMMARY_METRICS) highlighted in every
 # vertical block: Gross/Net Margin % (4, 7) + the Receivable/Payable parent rows
 # and their FY27/Old splits.
-_SUMMARY_HIGHLIGHT_ROWS = [4, 7, 15, 16, 17, 19, 20, 21]
+_SUMMARY_HIGHLIGHT_ROWS = [4, 7, 16, 17, 18, 20, 21, 22]
 
 # Indian digit grouping, single (non-conditional) custom format codes: the last
 # explicit comma-group size (2 digits) repeats automatically for any higher
@@ -1224,11 +1232,11 @@ _PCT_FMT = '0.00"%"'           # value is ALREADY the percent number (14.43 = 14
 # Summary sheet — known exactly since every vertical block has this fixed shape.
 _ROW_NUMFMT = {
     0: _INR_DEC,   1: _INR_INT,  2: _INR_INT,  3: _INR_INT,  4: _PCT_FMT,
-    5: _INR_INT,   6: _INR_INT,  7: _PCT_FMT,  8: _INR_DEC,  9: _INR_DEC,
-    10: _INR_DEC, 11: _INR_INT, 12: _INR_INT, 13: _INR_INT, 14: _INR_INT,
+    5: _INR_INT,   6: _INR_INT,  7: _PCT_FMT,  8: _INR_INT,  9: _INR_DEC,
+    10: _INR_DEC, 11: _INR_DEC, 12: _INR_INT, 13: _INR_INT, 14: _INR_INT,
     15: _INR_INT, 16: _INR_INT, 17: _INR_INT, 18: _INR_INT, 19: _INR_INT,
     20: _INR_INT, 21: _INR_INT, 22: _INR_INT, 23: _INR_INT, 24: _INR_INT,
-    25: _PCT_FMT, 26: _INR_INT, 27: _PCT_FMT,
+    25: _INR_INT, 26: _PCT_FMT, 27: _INR_INT, 28: _PCT_FMT,
 }
 
 

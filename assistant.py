@@ -126,6 +126,9 @@ checking numbers; the LIVE DATA snapshot gives every metric of every month):
   (Zoho vendor-credit ÷ 1.18); ALL notes on a shipment are summed and
   de-duplicated at document level. A CN ≥95% of the sale = full reversal.
 - Summary Sales (month) = Σ invoice Amount − (Actual CN + Provision CN).
+- Other Income (row after Net Margin %) = the Finance Up-Charge invoice items
+  of that month (they also sit inside Sales — the row only surfaces them);
+  FY = the sum. Frozen months come from the manual files' own Other Income row.
 - Summary Purchases = Σ Purchase Price − (Actual DN + Provision DN), which
   equals Σ(Total Cost − Logistics) since diversion/customs are 0 in the engine.
   EXCEPTION: Re-Commerce, ReWerse & Processing Center show GROSS purchases (no

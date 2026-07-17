@@ -223,8 +223,8 @@ with st.container(key="rkheader"):
         loaded = [s for s, v in status.items() if v["exists"]]
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
-        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.1.3"):
-            st.caption("build: **v3.1.3 — Recy always on screen (fixed-position fix) and roams the WHOLE page, perching on buttons**")
+        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.1.4"):
+            st.caption("build: **v3.1.4 — new Other Income summary row (Finance Up-Charge items; frozen months from the manual files)**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())

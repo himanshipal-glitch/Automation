@@ -269,11 +269,58 @@ CUSTOM_DUTY_PATH = PERSIST_DIR / "enterprise_custom_duty.parquet"
 ENT_OPCOST_PATH  = PERSIST_DIR / "enterprise_opcost.parquet"
 
 
-def _save_small(df: pd.DataFrame, path) -> int:
+# True/False result of the last GitHub write-through (for UI feedback).
+LAST_SYNC_OK: bool | None = None
+
+
+def _github_writethrough(path: Path, message: str) -> bool:
+    """Commit a persistent store file to the GitHub repo, so manual entries
+    survive hosted redeploys (Streamlit Cloud wipes the container filesystem
+    on every reboot/redeploy — only repo-tracked files come back).
+
+    Needs `[github]` in secrets: token (fine-grained PAT with Contents
+    read+write on the repo), repo ("owner/name"), optional branch (main).
+    Silent no-op when secrets are absent (e.g. running locally, where the
+    folder IS the git checkout and the file simply persists on disk)."""
+    try:
+        import streamlit as st
+        g = st.secrets.get("github", None)
+        token = g.get("token") if g else None
+        repo = g.get("repo") if g else None
+        branch = (g.get("branch") if g else None) or "main"
+        if not token or not repo:
+            return False
+    except Exception:
+        return False
+    try:
+        import base64
+        import requests
+        url = f"https://api.github.com/repos/{repo}/contents/persistent/{Path(path).name}"
+        hdrs = {"Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json"}
+        sha = None
+        r = requests.get(url, headers=hdrs, params={"ref": branch}, timeout=15)
+        if r.status_code == 200:
+            sha = r.json().get("sha")
+        payload = {"message": message, "branch": branch,
+                   "content": base64.b64encode(Path(path).read_bytes()).decode()}
+        if sha:
+            payload["sha"] = sha
+        r = requests.put(url, headers=hdrs, json=payload, timeout=20)
+        return r.status_code in (200, 201)
+    except Exception:
+        return False
+
+
+def _save_small(df: pd.DataFrame, path, sync_msg: str | None = None) -> int:
+    global LAST_SYNC_OK
+    written = path
     try:
         df.to_parquet(path, index=False)
     except Exception:
-        df.to_pickle(path.with_suffix(".pkl"))
+        written = path.with_suffix(".pkl")
+        df.to_pickle(written)
+    LAST_SYNC_OK = _github_writethrough(written, sync_msg) if sync_msg else None
     return len(df)
 
 
@@ -301,7 +348,8 @@ def save_custom_duty(df: pd.DataFrame) -> int:
     ok = pd.to_datetime(mon, format="%b-%y", errors="coerce").notna() \
          & amt.notna() & amt.ne(0)
     d = d[ok].reset_index(drop=True)
-    return _save_small(d, CUSTOM_DUTY_PATH)
+    return _save_small(d, CUSTOM_DUTY_PATH,
+                       sync_msg="Update Enterprise Custom Duty bills (app entry)")
 
 
 def load_custom_duty() -> pd.DataFrame:
@@ -317,7 +365,8 @@ def save_enterprise_opcost(df: pd.DataFrame) -> int:
     amt = pd.to_numeric(d.iloc[:, 1], errors="coerce")
     ok = pd.to_datetime(mon, format="%b-%y", errors="coerce").notna() & amt.notna()
     d = d[ok].reset_index(drop=True)
-    return _save_small(d, ENT_OPCOST_PATH)
+    return _save_small(d, ENT_OPCOST_PATH,
+                       sync_msg="Update Enterprise Operational Cost overrides (app entry)")
 
 
 def load_enterprise_opcost() -> dict:

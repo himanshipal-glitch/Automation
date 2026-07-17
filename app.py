@@ -220,8 +220,8 @@ with st.container(key="rkheader"):
         loaded = [s for s, v in status.items() if v["exists"]]
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
-        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.0.8"):
-            st.caption("build: **v3.0.8 — Details (No Samsung) driven by the signed-off file; button captions readable on ink pills**")
+        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.0.9"):
+            st.caption("build: **v3.0.9 — Op-Cost & Custom Duty entries survive restarts (GitHub write-through via [github] secrets)**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())
@@ -1414,6 +1414,20 @@ elif page == "Summary Report":
         #    entered as manual purchases into a chosen month. Enterprise ONLY.
         # 2) Operational Cost per month: user override for the Enterprise
         #    summary row. Both persist until edited again.
+        # durability: with [github] secrets the saves auto-commit to the repo, so
+        # entries survive hosted restarts/redeploys (the container disk is wiped).
+        _gh_on = False
+        try:
+            _gh_on = bool(st.secrets.get("github", {}).get("token"))
+        except Exception:
+            pass
+        _durability_note = (
+            "🔒 Saves auto-commit to GitHub — entries **survive app restarts and redeploys**."
+            if _gh_on else
+            "⚠ Hosted durability: add `[github]` secrets (`token`, `repo`) so saved entries "
+            "survive app restarts/redeploys — without them they live only on this "
+            "container's disk and reset when the app reboots.")
+
         _cd_store = db.load_custom_duty()
         with st.expander(f"🛃 Enterprise — Custom Duty bills ({len(_cd_store)} stored)"):
             st.caption("Custom-duty line items — **no bill/invoice in Zoho and no Shipment "
@@ -1421,6 +1435,7 @@ elif page == "Summary Report":
                        "Purchases). Each row lands in the Enterprise profitability in the "
                        "selected month and **stays stored** until edited here. "
                        "Month format: `Jul-26`.")
+            st.caption(_durability_note)
             _cd_seed = _cd_store if not _cd_store.empty else pd.DataFrame(
                 {"Month (mmm-yy)": pd.Series(dtype="str"),
                  "Supplier Name": pd.Series(dtype="str"),
@@ -1439,6 +1454,7 @@ elif page == "Summary Report":
             st.caption("Set the Enterprise **Operational Cost** for any month — the summary "
                        "row (and Net Margin) uses your value, overriding the computed/frozen "
                        "figure, and **stays stored** until you change it. Month format: `Jul-26`.")
+            st.caption(_durability_note)
             _oc_seed = (pd.DataFrame({"Month (mmm-yy)": list(_ent_oc.keys()),
                                       "Operational Cost": list(_ent_oc.values())})
                         if _ent_oc else

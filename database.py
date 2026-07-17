@@ -269,8 +269,10 @@ CUSTOM_DUTY_PATH = PERSIST_DIR / "enterprise_custom_duty.parquet"
 ENT_OPCOST_PATH  = PERSIST_DIR / "enterprise_opcost.parquet"
 
 
-# True/False result of the last GitHub write-through (for UI feedback).
+# True/False result of the last GitHub write-through (for UI feedback),
+# plus the exact failure reason so the UI can say WHY a sync failed.
 LAST_SYNC_OK: bool | None = None
+LAST_SYNC_ERR: str = ""
 
 
 def _github_writethrough(path: Path, message: str) -> bool:
@@ -282,6 +284,8 @@ def _github_writethrough(path: Path, message: str) -> bool:
     read+write on the repo), repo ("owner/name"), optional branch (main).
     Silent no-op when secrets are absent (e.g. running locally, where the
     folder IS the git checkout and the file simply persists on disk)."""
+    global LAST_SYNC_ERR
+    LAST_SYNC_ERR = ""
     try:
         import streamlit as st
         g = st.secrets.get("github", None)
@@ -289,15 +293,18 @@ def _github_writethrough(path: Path, message: str) -> bool:
         repo = g.get("repo") if g else None
         branch = (g.get("branch") if g else None) or "main"
         if not token or not repo:
+            LAST_SYNC_ERR = "[github] secrets missing (token/repo)"
             return False
     except Exception:
+        LAST_SYNC_ERR = "[github] secrets missing"
         return False
     try:
         import base64
         import requests
         url = f"https://api.github.com/repos/{repo}/contents/persistent/{Path(path).name}"
         hdrs = {"Authorization": f"Bearer {token}",
-                "Accept": "application/vnd.github+json"}
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28"}
         sha = None
         r = requests.get(url, headers=hdrs, params={"ref": branch}, timeout=15)
         if r.status_code == 200:
@@ -307,8 +314,16 @@ def _github_writethrough(path: Path, message: str) -> bool:
         if sha:
             payload["sha"] = sha
         r = requests.put(url, headers=hdrs, json=payload, timeout=20)
-        return r.status_code in (200, 201)
-    except Exception:
+        if r.status_code in (200, 201):
+            return True
+        try:
+            _gh_msg = r.json().get("message", "")
+        except Exception:
+            _gh_msg = r.text[:100]
+        LAST_SYNC_ERR = f"GitHub HTTP {r.status_code}: {_gh_msg}"
+        return False
+    except Exception as e:
+        LAST_SYNC_ERR = f"network error: {e}"
         return False
 
 
@@ -370,7 +385,7 @@ def save_custom_duty(df: pd.DataFrame) -> int:
     d.columns = [str(c) for c in d.columns]
     mdt = _parse_month_series(d.iloc[:, 0])
     amt = pd.to_numeric(d.iloc[:, -1], errors="coerce")
-    blank = d.iloc[:, 0].astype(str).str.strip().isin(["", "nan", "None"]) & amt.isna()
+    blank = mdt.isna() & amt.isna()          # empty editor row — not an error
     ok = mdt.notna() & amt.notna() & amt.ne(0)
     LAST_SAVE_DROPPED = [f"'{d.iloc[i, 0]}' / amount '{d.iloc[i, -1]}'"
                          for i in d.index[~ok & ~blank]]
@@ -396,7 +411,7 @@ def save_enterprise_opcost(df: pd.DataFrame) -> int:
     d = df.copy()
     mdt = _parse_month_series(d.iloc[:, 0])
     amt = pd.to_numeric(d.iloc[:, 1], errors="coerce")
-    blank = d.iloc[:, 0].astype(str).str.strip().isin(["", "nan", "None"]) & amt.isna()
+    blank = mdt.isna() & amt.isna()          # empty editor row — not an error
     ok = mdt.notna() & amt.notna()
     LAST_SAVE_DROPPED = [f"'{d.iloc[i, 0]}' / amount '{d.iloc[i, 1]}'"
                          for i in d.index[~ok & ~blank]]

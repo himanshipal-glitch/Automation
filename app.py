@@ -223,8 +223,8 @@ with st.container(key="rkheader"):
         loaded = [s for s, v in status.items() if v["exists"]]
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
-        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.1.8"):
-            st.caption("build: **v3.1.8 — Op-Cost/Custom-Duty saves: any month format accepted, rejected rows called out, sync status shown**")
+        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.1.9"):
+            st.caption("build: **v3.1.9 — GitHub sync failures now say WHY (exact API error); blank editor rows not flagged**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())
@@ -1552,8 +1552,11 @@ elif page == "Summary Report":
             if db.LAST_SYNC_OK is True:
                 msg += " 🔒 Synced to GitHub — survives restarts."
             elif db.LAST_SYNC_OK is False:
-                msg += (" ⚠ Saved on this server only — it will RESET when the app "
-                        "restarts, until the [github] secrets (token+repo) are added.")
+                msg += (" ⚠ GitHub sync FAILED — saved on this server only (resets on "
+                        "restart). Reason: " + (db.LAST_SYNC_ERR or "unknown")
+                        + ". Common fixes: the token needs Contents: Read-and-write on "
+                        "himanshipal-glitch/Automation; repo must be exactly "
+                        "'himanshipal-glitch/Automation'.")
             return msg
 
         _cd_store = db.load_custom_duty()

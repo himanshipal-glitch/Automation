@@ -54,6 +54,12 @@ streamlit run app.py --server.port 8502
 | Quantity displayed in MT (÷1000); IT AD & Re-Commerce count units | `reports.py` → `_summary_block(qty_in_mt)`, `frozen.py` → `UNIT_TABS` |
 | Out-of-scope verticals hidden: ReWerse, IB(Warehouse) | `reports.py` → end of `summaries_by_category` |
 | DSO/DPO: balance ÷ (sales/purchases × 1.18) × days; open month uses cutoff day | `reports.py` → `_summary_block`, `_working_days` |
+| Metal displays as **End Generator** everywhere (tabs/sheets/emails); matching still accepts the old name | `reports.py` → `_canon_label` |
+| Workbook detail sheet is named **Details**; 'Finance Up-Charge' invoice items get their own table below it | `reports.py` → `combined_workbook` |
+| Enterprise **Custom Duty bills** (no bill in Zoho): entered on the Summary page, land in Details (Material "Custom Duty", Black Gold vendor) + FY-Total Purchases | `reports.py` → `inject_custom_duty`, store in `database.py` |
+| Enterprise **Operational Cost overrides** per month (user-entered, persistent) | `app.py` → `_apply_ent_opcost`, store in `database.py` |
+| **Re-Commerce (Without Samsung)** additive view: vendor-name subset, Apr–Jun frozen to signed-off figures, extra summary block + 'Details (No Samsung)' sheet | `reports.py` → `rc_without_samsung`, `frozen.py` → `RC_NOSAMSUNG_FROZEN` |
+| Manual entries survive hosted restarts via GitHub write-through (`[github]` secrets: token/repo) | `database.py` → `_github_writethrough` |
 
 ---
 
@@ -102,7 +108,7 @@ streamlit run app.py --server.port 8502
 | Emails don't send / button disabled | `[email]` missing in secrets, or app password revoked → make a new one. `535 BadCredentials` = wrong password. |
 | A vertical's month suddenly zero | Is it a closed month? Check the per-vertical "till" file for that month exists in the folder (partial files don't freeze). Live month → check the MIS actually contains those invoices. |
 | Numbers look wrong vs manual | 1) Date coverage of the MIS. 2) Stray docs: DN-series invoice numbers (`…27DN…`), `OFF` orders, MP shipments — see §3. 3) Compare with the manual's own file using the frozen parser. |
-| Sidebar shows more rows than the MIS has | Two files got uploaded in one session (uploads accumulate). Refresh the browser tab (clears session) and re-upload only the MIS. |
+| Status chip (top-right) shows more rows than the MIS has | Two files got uploaded in one session (uploads accumulate). Refresh the browser tab (clears session) and re-upload only the MIS. |
 | Robot/chat looks stale | Hard-refresh the browser once (Ctrl+R). |
 
 ---

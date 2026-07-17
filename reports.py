@@ -1690,13 +1690,30 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
             _headers.append(("Details", _fu_title + 1))
 
         # ── Details (No Samsung) — ADDITIVE Re-Commerce subset sheet ─────────
-        # Same rows as the main Details' Re-Commerce section, minus shipments
-        # whose vendor name starts with 'Samsung'. Nothing existing moves.
+        # Driven by the signed-off WITHOUT-Samsung manual detail store (same
+        # pattern as the regular Re-Commerce flow); live rows only ADD the
+        # genuinely-new non-Samsung shipments the store doesn't know. Falls
+        # back to a plain vendor filter when no store exists. Nothing in the
+        # existing sheets moves.
         if rc_ns_summary is not None and len(_main):
             _ns_cat = _main.iloc[:, 85].astype(str)
             _ns_rc = _ns_cat.str.contains(r"re-commerce|recommerce", case=False, na=False)
             _ns_sup = _main.iloc[:, 4].astype(str).str.strip().str.lower()
             _ns = _main[_ns_rc & ~_ns_sup.str.startswith("samsung")]
+            try:
+                _ns_manual = _dbm.load_recommerce_manual(False) if _dbm is not None else None
+            except Exception:
+                _ns_manual = None
+            if _ns_manual is not None and len(_ns_manual):
+                _ns = apply_recommerce_manual(_ns, _ns_manual)
+                if "Row Source" in _ns.columns:
+                    _rsrc = _ns["Row Source"].astype(str)
+                    _ns.loc[_rsrc.isin(["", "nan", "None"]) | _ns["Row Source"].isna(),
+                            "Row Source"] = "Manual (No-Samsung file)"
+                if "Date" in _ns.columns:      # chronological, like the main sheet
+                    _nsd = parse_dates(_ns["Date"])
+                    _ns = _ns.loc[pd.concat([_nsd[_nsd.notna()].sort_values(kind="stable"),
+                                             _nsd[_nsd.isna()]]).index].reset_index(drop=True)
             _ns.to_excel(w, sheet_name="Details (No Samsung)", index=False,
                          startrow=1)   # row 1 = colored group header
             _add_group_header(w.sheets["Details (No Samsung)"], list(_ns.columns))

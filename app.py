@@ -168,6 +168,10 @@ div[role="radiogroup"][aria-label="Navigate"] label:has(input:checked) p{ color:
   background:var(--ink); color:#fff !important; transform:translateY(-2px);
   box-shadow:0 12px 24px -8px rgba(22,22,15,.35); }
 .stDownloadButton>button:active{ transform:translateY(0) scale(.985); }
+/* button captions render as <p> inside the button — they must follow the
+   button's own color (white on ink pills), not the page's paragraph ink */
+.stButton>button p, .stDownloadButton>button p, .stFormSubmitButton>button p,
+[data-testid="stFileUploaderDropzone"] button p{ color:inherit !important; }
 
 /* ═══ tables · expanders · inputs ═══ */
 [data-testid="stDataFrame"], [data-testid="stTable"]{
@@ -216,8 +220,8 @@ with st.container(key="rkheader"):
         loaded = [s for s, v in status.items() if v["exists"]]
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
-        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.0.7"):
-            st.caption("build: **v3.0.7 — additive Re-Commerce (Without Samsung) view: second summary table, second Details sheet, signed-off Apr–Jun freeze**")
+        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.0.8"):
+            st.caption("build: **v3.0.8 — Details (No Samsung) driven by the signed-off file; button captions readable on ink pills**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())

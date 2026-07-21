@@ -223,8 +223,8 @@ with st.container(key="rkheader"):
         loaded = [s for s, v in status.items() if v["exists"]]
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
-        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.3.2"):
-            st.caption("build: **v3.3.2 — Amazon-live Re-Commerce rows fully populated from the MIS + sheet; currency-string prices parsed; positional build**")
+        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.3.3"):
+            st.caption("build: **v3.3.3 — Reco review consolidated by vertical: adds Invoice No, Purchase Price, and Cost Source (price origin)**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())
@@ -1529,7 +1529,8 @@ elif page == "Summary Report":
             _ed["Reco? (exclude)"] = _ed["Shipment ID"].isin(_prev)
             _res = st.data_editor(
                 _ed, hide_index=True, use_container_width=True, key=f"reco_editor{suffix}",
-                disabled=["Vertical", "Shipment ID", "Date", "Buyer Name", "Material", "Amount"])
+                disabled=["Vertical", "Shipment ID", "Invoice No", "Date", "Buyer Name",
+                          "Material", "Amount", "Purchase Price", "Cost Source"])
             if st.button("💾 Save & compute summary", key=f"reco_save{suffix}"):
                 # Keep prior ticks for shipments hidden by the vertical filter;
                 # update only the rows shown in the editor.

@@ -775,25 +775,38 @@ def _itad_reco_mask(df: pd.DataFrame) -> pd.Series:
 
 
 def reco_candidates(profit_df: pd.DataFrame) -> pd.DataFrame:
-    """Per-shipment list of missing-bill candidates (ALL verticals) for the manual
-    Reco-Items review on the Summary page. Positional: 2=Date, 3=Shipment ID,
-    12=Material, 41=Buyer Name, 48=Amount, 85=Broad Category (Vertical)."""
+    """Per-shipment list of Reco-review candidates (ALL verticals), consolidated
+    by vertical, with the Invoice No alongside the Shipment ID and each price's
+    ORIGIN (Cost Source) so the reviewer can see where the cost came from.
+    Positional: 2=Date, 3=Shipment ID, 12=Material, 15=Purchase Price,
+    39=Inv. No., 41=Buyer Name, 48=Amount, 85=Broad Category (Vertical)."""
     mask = _itad_reco_mask(profit_df)
-    cols = ["Vertical", "Shipment ID", "Date", "Buyer Name", "Material", "Amount"]
+    cols = ["Vertical", "Shipment ID", "Invoice No", "Date", "Buyer Name",
+            "Material", "Amount", "Purchase Price", "Cost Source"]
     if not mask.any():
         return pd.DataFrame(columns=cols)
     sub = profit_df[mask]
+    _csc = next((c for c in profit_df.columns
+                 if "".join(ch for ch in str(c).lower() if ch.isalnum()) == "costsource"), None)
+    _uniq_join = lambda x: ", ".join(sorted({str(v).strip() for v in x
+                                             if str(v).strip() not in ("", "nan", "None")}))
     g = pd.DataFrame({
-        "Vertical": sub.iloc[:, 85].astype(str).str.strip(),
+        "Vertical": sub.iloc[:, 85].astype(str).str.strip().map(_canon_label),
         "Shipment ID": sub.iloc[:, 3].astype(str).str.strip(),
+        "Invoice No": sub.iloc[:, 39].astype(str).str.strip(),
         "Date": pd.to_datetime(sub.iloc[:, 2], errors="coerce").dt.strftime("%Y-%m-%d").fillna(""),
         "Buyer Name": sub.iloc[:, 41].astype(str),
         "Material": sub.iloc[:, 12].astype(str),
         "Amount": pd.to_numeric(sub.iloc[:, 48], errors="coerce").fillna(0.0),
+        "Purchase Price": pd.to_numeric(sub.iloc[:, 15], errors="coerce").fillna(0.0),
+        "Cost Source": (sub[_csc].astype(str) if _csc else pd.Series("", index=sub.index)),
     })
-    return (g.groupby("Shipment ID", as_index=False)
-             .agg({"Vertical": "first", "Date": "first", "Buyer Name": "first",
-                   "Material": lambda x: ", ".join(sorted(set(x))), "Amount": "sum"}))[cols]
+    out = (g.groupby("Shipment ID", as_index=False)
+             .agg({"Vertical": "first", "Invoice No": _uniq_join, "Date": "first",
+                   "Buyer Name": "first", "Material": _uniq_join,
+                   "Amount": "sum", "Purchase Price": "sum",
+                   "Cost Source": lambda x: _uniq_join(x) or "No Cost Found"}))[cols]
+    return out.sort_values(["Vertical", "Shipment ID"], ignore_index=True)
 
 
 def _reco_exclusion_mask(df: pd.DataFrame, reco_ships: set | None) -> pd.Series:

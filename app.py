@@ -223,8 +223,8 @@ with st.container(key="rkheader"):
         loaded = [s for s, v in status.items() if v["exists"]]
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
-        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.2.4"):
-            st.caption("build: **v3.2.4 — reco-excluded shipments are removed from the frozen month they belong to (summary honors the exclusion)**")
+        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.2.5"):
+            st.caption("build: **v3.2.5 — reco exclusion flows Details → FY → July; frozen months never change**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())
@@ -1648,8 +1648,7 @@ elif page == "Summary Report":
             _s = reports.summaries_by_category(_pdf, _ar, _ap, op_cost_bills=_obills,
                                                reco_ships=reco_ships)
             try:
-                _s = _frozen.apply_frozen(_s, _app_dir, _open_m, skip_tabs=_reco_skip,
-                                          profit_df=_pdf, reco_ships=reco_ships)
+                _s = _frozen.apply_frozen(_s, _app_dir, _open_m, skip_tabs=_reco_skip)
             except Exception as _fe:
                 st.caption(f"⚠ Frozen-month overlay skipped: {_fe}")
             return _apply_ent_opcost(_s)

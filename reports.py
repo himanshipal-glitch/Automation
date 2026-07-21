@@ -118,6 +118,13 @@ def _ib_warehouse_set() -> set:
 
 CUSTOM_DUTY_COST_SOURCE = "Custom Duty (manual entry)"
 OPCOST_COST_SOURCE = "Operational Cost (manual entry)"
+AFR_OPCOST_COST_SOURCE = "AFR Operational Cost (service charge)"
+# AFR tradable materials — always PURCHASE cost, never operational cost.
+# NB: no bare "char" — it substring-matches "Transport CHARges" (a service).
+_AFR_MATERIAL_KW = ("chilli", "chilly", "husk", "pyrolysis", "briquette")
+def _is_afr_material(item) -> bool:
+    s = str(item).lower()
+    return any(k in s for k in _AFR_MATERIAL_KW)
 CUSTOM_DUTY_VENDOR = "BLACK GOLD RECYCLING PRIVATE LIMITED"
 CUSTOM_DUTY_VENDOR_GST = "24AAMCB5608A1Z3"
 
@@ -725,7 +732,8 @@ def _bal_sum(df: pd.DataFrame | None, month: str | None,
 
 def _summary_block(w: pd.DataFrame, recv: float, pay: float, wd: float = 30,
                    oc_override: float | None = None,
-                   qty_in_mt: bool = True) -> list:
+                   qty_in_mt: bool = True,
+                   tc_override: float | None = None) -> list:
     """
     Compute the summary metrics for one slice (a month or the full FY).
     `wd` = number of working/calendar days in the period (per-column, not summed).
@@ -772,7 +780,9 @@ def _summary_block(w: pd.DataFrame, recv: float, pay: float, wd: float = 30,
     gross_pur = float(w["Purchase_Price"].sum())
     pur   = gross_pur - net_dn          # only eligible verticals' DN reduces cost
     gm    = sales - pur
-    tc    = float(w["Logistics_Cost"].sum())
+    # Transportation Charges = per-shipment logistics + any blank-CFSO transport
+    # charge override (AFR "Transport Charges" bills, kept OUT of op cost).
+    tc    = float(w["Logistics_Cost"].sum()) + (tc_override or 0.0)
     oc    = oc_override if oc_override is not None else float(w["Operational_Cost"].sum())
     nm    = gm - tc - oc
 
@@ -795,7 +805,7 @@ def _summary_block(w: pd.DataFrame, recv: float, pay: float, wd: float = 30,
         # quantity is DISPLAYED in MT for weight verticals (data is Kg);
         # IT AD / Re-Commerce count units and stay as-is. Per-kg rows below
         # keep using the raw Kg/unit figure.
-        round(qty / 1000 if qty_in_mt else qty, 2),
+        round(qty / 1000 if qty_in_mt else qty, 0),   # quantity shown as nearest integer
         round(sales, 0),
         round(pur, 0),
         round(gm, 0),
@@ -830,7 +840,8 @@ def summary_report(profit_df: pd.DataFrame,
                    recv_override: float | None = None,
                    pay_override: float | None = None,
                    axis_end: pd.Timestamp | None = None,
-                   qty_in_mt: bool = True) -> pd.DataFrame:
+                   qty_in_mt: bool = True,
+                   transport_by_month: dict | None = None) -> pd.DataFrame:
     """
     Build the management summary: rows = metrics, columns = each month
     (mmm-yy, chronological) + 'FY Total'.
@@ -896,6 +907,7 @@ def summary_report(profit_df: pd.DataFrame,
 
     data = {"Metric": SUMMARY_METRICS}
     _ocm = op_cost_by_month or {}
+    _tcm = transport_by_month or {}
     for m in months:
         # recv_override is a single point-in-time net (legacy+unused+prefix rule);
         # apply it to the LATEST month only (it's a current snapshot), leave history
@@ -908,7 +920,8 @@ def summary_report(profit_df: pd.DataFrame,
                               _rv, _pv,
                               wd=_working_days(m),
                               oc_override=(_ocm.get(m) if _ocm else None),
-                              qty_in_mt=qty_in_mt)
+                              qty_in_mt=qty_in_mt,
+                              tc_override=(_tcm.get(m) if _tcm else None))
         # bifurcation rows, slotted under their parents (FY27 + Old = parent)
         _f27r, _oldr = _split(ar_df, _rv, m)
         _f27p, _oldp = _split(ap_df, _pv, m)
@@ -925,7 +938,8 @@ def summary_report(profit_df: pd.DataFrame,
                           pay_override if pay_override is not None else _bal_sum(ap_df, None, fy_start),
                           wd=fy_wd,
                           oc_override=(sum(_ocm.values()) if _ocm else None),
-                          qty_in_mt=qty_in_mt)
+                          qty_in_mt=qty_in_mt,
+                          tc_override=(sum(_tcm.values()) if _tcm else None))
     _rv_fy = recv_override if recv_override is not None else _bal_sum(ar_df, None, fy_start)
     _pv_fy = pay_override if pay_override is not None else _bal_sum(ap_df, None, fy_start)
     _f27r_fy, _oldr_fy = _split(ar_df, _rv_fy, None)
@@ -1034,13 +1048,15 @@ def _attribute_ar(ar_df, profit_df):
     return df
 
 
-def _afr_op_cost(bills_df) -> dict:
-    """AFR Operational Cost by month = Σ Item_Total of bills where
-    account is Marketplace Purchases (AFR) (Logistics → Transportation Charges,
-    not op cost), CFSO is blank, and Bill Status is not Void (Paid + Overdue,
-    consistent with the rest of the pipeline). Source: the older-bills store."""
+def _afr_opcost_bills(bills_df, kind: str = "opcost"):
+    """Return (sub_df, col_map) of AFR blank-CFSO service/charge bill rows.
+    kind='opcost' → operational-cost charges (Manpower, Technical Testing,
+    Electrical, Bentonite, Starch, …); kind='transport' → the Transport Charges
+    bills (booked as Transportation Charges, NOT operational cost). Tradable
+    materials (chilli/husk/pyrolysis char) are excluded either way — they stay
+    in purchase cost."""
     if bills_df is None or getattr(bills_df, "empty", True):
-        return {}
+        return None, {}
     df = bills_df
     def col(*names):
         for n in names:
@@ -1048,24 +1064,113 @@ def _afr_op_cost(bills_df) -> dict:
                 if str(c).strip().lower() == n:
                     return c
         return None
-    acc = col("account"); cfso = col("cfso_number", "cf.so number")
+    acc = col("account"); cfso = col("cfso_number", "cf.so number", "cf_so_number")
     stat = col("bill_status", "status"); itot = col("item_total")
-    bdate = col("bill_date")
-    if not all([acc, cfso, stat, itot, bdate]):
-        return {}
+    bdate = col("bill_date"); item = col("item_name", "item name")
+    ven = col("vendor_name", "vendor name"); gst = col("gst identification number (gstin)",
+                                                       "gst_identification_number_gstin", "gstin")
+    if not all([acc, cfso, itot, bdate, item]):
+        return None, {}
     a = df[acc].astype(str)
     blank = df[cfso].isna() | df[cfso].astype(str).str.strip().isin(["", "nan", "None", "NaT"])
-    sel = (a.str.contains("afr", case=False, na=False)
-           & a.str.contains("marketplace purchases", case=False, na=False)   # Purchases only
-           & blank
-           & ~df[stat].astype(str).str.strip().str.lower().isin(["void"]))
+    notvoid = (~df[stat].astype(str).str.strip().str.lower().isin(["void"])) if stat else True
+    is_mat = df[item].apply(_is_afr_material)
+    is_tr = df[item].astype(str).str.contains("transport", case=False, na=False)
+    base = a.str.contains("afr", case=False, na=False) & blank & notvoid & ~is_mat
+    # kind: "opcost" = service/consumable charges (NOT transport); "transport" =
+    # the Transport Charges bills (shown as Transportation Charges, not op cost).
+    sel = (base & is_tr) if kind == "transport" else (base & ~is_tr)
     sub = df[sel]
     if sub.empty:
+        return None, {}
+    return sub, {"acc": acc, "itot": itot, "bdate": bdate, "item": item, "ven": ven, "gst": gst}
+
+
+def _afr_op_cost(bills_df) -> dict:
+    """AFR Operational Cost by month = Σ Item_Total of the service-charge bills
+    (see _afr_opcost_bills). Materials stay in purchases; both AFR accounts count;
+    Transport Charges (under Marketplace Logistics, blank CF.SO) is included."""
+    sub, m = _afr_opcost_bills(bills_df, "opcost")
+    if sub is None:
         return {}
-    mth = pd.to_datetime(sub[bdate], errors="coerce").dt.strftime("%b-%y")
-    val = pd.to_numeric(sub[itot], errors="coerce").fillna(0)
+    mth = pd.to_datetime(sub[m["bdate"]], errors="coerce").dt.strftime("%b-%y")
+    val = pd.to_numeric(sub[m["itot"]], errors="coerce").fillna(0)
     return {k: float(v) for k, v in val.groupby(mth).sum().items()}
 
+
+def _afr_transport(bills_df) -> dict:
+    """AFR Transportation Charges by month = Σ Item_Total of the blank-CFSO
+    'Transport Charges' bills — kept OUT of operational cost (they reduce Net
+    Margin as transport, matching the manual's separate row)."""
+    sub, m = _afr_opcost_bills(bills_df, "transport")
+    if sub is None:
+        return {}
+    mth = pd.to_datetime(sub[m["bdate"]], errors="coerce").dt.strftime("%b-%y")
+    val = pd.to_numeric(sub[m["itot"]], errors="coerce").fillna(0)
+    return {k: float(v) for k, v in val.groupby(mth).sum().items()}
+
+
+def inject_afr_opcost(profit_df: pd.DataFrame, bills_df) -> pd.DataFrame:
+    """Append the AFR blank-CFSO charge bills as Details line items, Broad
+    Category 'AFR'. Operational-cost charges carry the amount in the Operational
+    Cost column (Cost Source marker → they land in the OPERATIONAL COST sub-table,
+    like Enterprise). 'Transport Charges' bills carry the amount in the Logistics
+    Cost column (they show as a transportation line in the main table, NOT op
+    cost). Display/audit only — the summary rows are driven by _afr_op_cost /
+    _afr_transport."""
+    if profit_df is None or profit_df.empty:
+        return profit_df
+    def _named(name):
+        key = "".join(ch for ch in name.lower() if ch.isalnum())
+        return next((c for c in profit_df.columns
+                     if "".join(ch for ch in str(c).lower() if ch.isalnum()) == key), None)
+    cols = list(profit_df.columns)
+    rows = []
+    for kind in ("opcost", "transport"):
+        sub, m = _afr_opcost_bills(bills_df, kind)
+        if sub is None:
+            continue
+        for _, br in sub.iterrows():
+            bdt = pd.to_datetime(br[m["bdate"]], errors="coerce")
+            if pd.isna(bdt):
+                continue
+            fy_apr1 = pd.Timestamp(bdt.year if bdt.month >= 4 else bdt.year - 1, 4, 1)
+            amt = float(pd.to_numeric(pd.Series([br[m["itot"]]]), errors="coerce").fillna(0).iloc[0])
+            item = str(br[m["item"]]).strip()
+            r = {c: None for c in cols}
+            if len(cols) > 86:
+                r[cols[0]]  = "Q" + str((bdt.month - 4) % 12 // 3 + 1)
+                r[cols[1]]  = bdt.strftime("%b-%y")
+                r[cols[2]]  = bdt.strftime("%Y-%m-%d")
+                r[cols[3]]  = ""                                        # no shipment id
+                r[cols[4]]  = str(br[m["ven"]]).strip() if m["ven"] else ""
+                r[cols[5]]  = str(br[m["gst"]]).strip() if m["gst"] else ""
+                r[cols[12]] = item                                     # Material = item name
+                r[cols[13]] = 1
+                r[cols[17]] = 1
+                if kind == "transport":
+                    r[cols[23]] = amt                                   # Logistics cost (Y)
+                    r[cols[26]] = amt                                   # Total Logistics Cost (AB)
+                else:
+                    r[cols[27]] = amt                                   # Operational Cost
+                r[cols[38]] = bdt.strftime("%Y-%m-%d")
+                r[cols[49]] = "FALSE"
+                r[cols[53]] = "Regular"
+                r[cols[78]] = "Service Charges"
+                r[cols[83]] = int((bdt - fy_apr1).days // 7) + 1
+                r[cols[84]] = str(br[m["acc"]]).strip()
+                r[cols[85]] = "AFR"                                     # -> AFR tab
+            cs = _named("Cost Source"); rn = _named("Resale Note")
+            if kind == "transport":
+                if cs is not None: r[cs] = "AFR Transportation (service charge)"
+                if rn is not None: r[rn] = "AFR transportation charge (blank-CFSO Transport Charges bill)"
+            else:
+                if cs is not None: r[cs] = AFR_OPCOST_COST_SOURCE
+                if rn is not None: r[rn] = "AFR operational cost — service/consumable charge (drives the summary's Op-Cost row)"
+            rows.append(r)
+    if not rows:
+        return profit_df
+    return pd.concat([profit_df, pd.DataFrame(rows, columns=cols)], ignore_index=True)
 
 def summaries_by_category(profit_df: pd.DataFrame,
                           ar_df: pd.DataFrame | None = None,
@@ -1107,8 +1212,10 @@ def summaries_by_category(profit_df: pd.DataFrame,
         sub = ar_attr[ar_attr["_tab"] == tab]
         return sub if len(sub) else None
 
-    # AFR operational cost (CFSO-blank, Paid AFR bills) — by month
+    # AFR operational cost (CFSO-blank service charges) + transportation charges
+    # (CFSO-blank 'Transport Charges') — by month, kept as separate lines.
     _afr_oc = _afr_op_cost(op_cost_bills)
+    _afr_tr = _afr_transport(op_cost_bills)
 
     # Per-vertical NET receivable (invoice-prefix attribution − legacy − unused,
     # with the Black-Gold→Re-Commerce rule) from the receivables builder. This is
@@ -1216,10 +1323,11 @@ def summaries_by_category(profit_df: pd.DataFrame,
         else:
             label = c if c and c.lower() != "nan" else "Uncategorised"
             _oc = _afr_oc if label.upper() == "AFR" else None
+            _tr = _afr_tr if label.upper() == "AFR" else None
             out[label] = summary_report(main_df[mask], _ar(label), _ap(label),
                                         op_cost_by_month=_oc, recv_override=_recv_net(label),
                                         pay_override=_pay_net(label), axis_end=_axis_end,
-                                        qty_in_mt=_mt(label))
+                                        qty_in_mt=_mt(label), transport_by_month=_tr)
 
     # Out-of-scope verticals — handled manually, not part of the automated report.
     # (Their rows still roll into 'All Categories'; only their own tabs are hidden.)
@@ -1303,7 +1411,7 @@ _PCT_FMT = '0.00"%"'           # value is ALREADY the percent number (14.43 = 14
 # Per-row (0-indexed into SUMMARY_METRICS, 28 rows) number format for the
 # Summary sheet — known exactly since every vertical block has this fixed shape.
 _ROW_NUMFMT = {
-    0: _INR_DEC,   1: _INR_INT,  2: _INR_INT,  3: _INR_INT,  4: _PCT_FMT,
+    0: _INR_INT,   1: _INR_INT,  2: _INR_INT,  3: _INR_INT,  4: _PCT_FMT,
     5: _INR_INT,   6: _INR_INT,  7: _PCT_FMT,  8: _INR_INT,  9: _INR_DEC,
     10: _INR_DEC, 11: _INR_DEC, 12: _INR_INT, 13: _INR_INT, 14: _INR_INT,
     15: _INR_INT, 16: _INR_INT, 17: _INR_INT, 18: _INR_INT, 19: _INR_INT,
@@ -1459,7 +1567,8 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
                       ap_df: pd.DataFrame | None = None,
                       vertical: str | None = None,
                       reco_ships: set | None = None,
-                      rc_ns_summary: pd.DataFrame | None = None) -> bytes:
+                      rc_ns_summary: pd.DataFrame | None = None,
+                      op_cost_bills: pd.DataFrame | None = None) -> bytes:
     """One Excel with four stacked sheets — Summary, Receivables, Payables,
     Details (the profitability report). If `vertical` is given, everything is
     filtered to it; otherwise all verticals are included (stacked by type).
@@ -1630,6 +1739,18 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
                         .str.strip().eq(OPCOST_COST_SOURCE).any())
             if not _already:
                 _live_src = inject_enterprise_opcost(_live_src, _ocm2)
+        # AFR service-charge bills → Operational Cost line items (display/audit;
+        # the AFR summary row is driven by _afr_op_cost over the same bills).
+        if op_cost_bills is not None:
+            try:
+                _csp = next((c for c in _live_src.columns
+                             if "".join(ch for ch in str(c).lower() if ch.isalnum()) == "costsource"), None)
+                _afr_done = (_csp is not None and _live_src[_csp].astype(str)
+                             .str.strip().eq(AFR_OPCOST_COST_SOURCE).any())
+                if not _afr_done:
+                    _live_src = inject_afr_opcost(_live_src, op_cost_bills)
+            except Exception:
+                pass
         _tgt = list(_live_src.columns)
 
         def _nrm(s):
@@ -1775,7 +1896,8 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
                       if "".join(ch for ch in str(c).lower() if ch.isalnum()) == "costsource"), None)
             if c is None:
                 return pd.Series(False, index=df.index)
-            return df[c].astype(str).str.strip().eq(OPCOST_COST_SOURCE)
+            return df[c].astype(str).str.strip().isin(
+                [OPCOST_COST_SOURCE, AFR_OPCOST_COST_SOURCE])
 
         _ocrows = _rep[_oc_of(_rep)]                       # manual Op-Cost line items
         _main = _rep[~_fu_of(_rep) & ~_oc_of(_rep)]        # keep both out of the main table
@@ -1810,7 +1932,7 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
             _headers.append(("Details", _next_title + 1))
             _next_title += 1 + len(_fu) + 3                    # title+header+rows+2 blanks
         if len(_ocrows):
-            pd.DataFrame([["OPERATIONAL COST — user-entered monthly Service Charges "
+            pd.DataFrame([["OPERATIONAL COST — service charges "
                            "(drives the Summary's Operational Cost row)"]]) \
                 .to_excel(w, sheet_name="Details", startrow=_next_title - 1, startcol=0,
                           index=False, header=False)

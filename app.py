@@ -223,8 +223,8 @@ with st.container(key="rkheader"):
         loaded = [s for s, v in status.items() if v["exists"]]
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
-        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.2.1"):
-            st.caption("build: **v3.2.1 — Details sheet reflects the latest MIS (merged with store); Margin % shown as true percent**")
+        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.2.2"):
+            st.caption("build: **v3.2.2 — AFR operational cost (service charges, own Details table) + Transport Charges as transport; summary qty rounded to integer**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())
@@ -1461,7 +1461,11 @@ elif page == "Summary Report":
 
         ar_df = db.read_table("AR", "raw").drop(columns=["_source_file"], errors="ignore")
         ap_df = db.read_table("AP", "raw").drop(columns=["_source_file"], errors="ignore")
-        op_bills = db.load_older_bills()   # comprehensive bills (incl. CFSO-blank) for op-cost
+        # Operational-cost bills: the CURRENT MIS's cleaned Bill table (holds this
+        # period's AFR service charges — blank-CFSO Manpower/Transport/etc.), with
+        # the older-bills store as fallback. Drives the AFR Operational Cost row.
+        _cur_bills = db.read_table("Bill", "cleaned").drop(columns=["_source_file"], errors="ignore")
+        op_bills = _cur_bills if not _cur_bills.empty else db.load_older_bills()
         _ar = ar_df if not ar_df.empty else None
         _ap = ap_df if not ap_df.empty else None
         _obills = op_bills if not op_bills.empty else None
@@ -1708,7 +1712,7 @@ elif page == "Summary Report":
                     try:
                         _wb_v = reports.combined_workbook(
                             summaries, _sel_pdf, _ar, _ap, vertical=name, reco_ships=reco_ships,
-                            rc_ns_summary=_rc_ns if name == "Re-Commerce" else None)
+                            rc_ns_summary=_rc_ns if name == "Re-Commerce" else None, op_cost_bills=_obills)
                         st.download_button(
                             f"⬇ Download {name} (Excel — Summary · Receivables · Payables · Report)",
                             _wb_v, file_name=f"profitability_{safe}.xlsx",
@@ -1739,7 +1743,7 @@ elif page == "Summary Report":
             try:
                 _s = summaries if _lbl == _sel else _build(_pdf)
                 _wb_all = reports.combined_workbook(_s, _pdf, _ar, _ap, reco_ships=reco_ships,
-                                                    rc_ns_summary=_rc_ns)
+                                                    rc_ns_summary=_rc_ns, op_cost_bills=_obills)
                 st.download_button(
                     f"⬇ Download ALL Verticals{_sfx} (Excel — Summary · Receivables · Payables · Report)",
                     _wb_all, file_name=_fn,
@@ -1806,7 +1810,7 @@ elif page == "Summary Report":
                         if _v == "All Categories":
                             continue
                         _wb = reports.combined_workbook(_s, _pdf, _ar, _ap, vertical=_v, reco_ships=reco_ships,
-                                                        rc_ns_summary=_rc_ns if _v == "Re-Commerce" else None)
+                                                        rc_ns_summary=_rc_ns if _v == "Re-Commerce" else None, op_cost_bills=_obills)
                         _rcpts = only_to or _rbv.get(_v, _base_to)
                         _safe = _v.replace("(", "_").replace(")", "").replace("/", "-").replace(" ", "_")
                         _vbody = _body.replace("Profitability Report", f"Profitability Report - {_v}")
@@ -1817,7 +1821,7 @@ elif page == "Summary Report":
                         results.append(f"{'✅' if _ok else '❌'} {_v}{_vsfx}: {_msg}")
                 else:
                     _wb = reports.combined_workbook(_s, _pdf, _ar, _ap, reco_ships=reco_ships,
-                                                    rc_ns_summary=_rc_ns)
+                                                    rc_ns_summary=_rc_ns, op_cost_bills=_obills)
                     _ok, _msg = _mailer.send_report(
                         only_to or _base_to, f"{_subj}{_vsfx}", _body, _wb,
                         f"profitability_all{_fsfx}.xlsx", _cfg,

@@ -312,7 +312,7 @@ def _round_cell(idx: int, val: float):
     if idx in _COUNTS:
         return int(round(val))
     if idx == 0:
-        return round(val, 2)
+        return round(val, 0)
     if idx in _RATIO2:
         return round(val, 2)
     return round(val, 0)   # money, balances, days
@@ -508,7 +508,7 @@ def _recompute_fy(df: pd.DataFrame, open_month: str | None, tab: str = "") -> No
         def _fyv(i):
             return float(pd.to_numeric(pd.Series([df.iat[i, fyloc]]),
                                        errors="coerce").fillna(0).iloc[0])
-        _Qr = round(_fyv(0) - sum(g(0, m) for m in _priors), 2)
+        _Qr = round(_fyv(0) - sum(g(0, m) for m in _priors), 0)
         _Sr = round(_fyv(1) - sum(g(1, m) for m in _priors), 0)
         _Pr = round(_fyv(2) - sum(g(2, m) for m in _priors), 0)
         df.iat[0, _oc], df.iat[1, _oc], df.iat[2, _oc] = _Qr, _Sr, _Pr
@@ -540,7 +540,7 @@ def _recompute_fy(df: pd.DataFrame, open_month: str | None, tab: str = "") -> No
     tc_abs = sum(g(11, m) * g(0, m) * (1 if tab in UNIT_TABS else 1000) for m in use)
 
     fy = {
-        0: round(qty, 2), 1: round(sales, 0), 2: round(pur, 0), 3: round(gm, 0),
+        0: round(qty, 0), 1: round(sales, 0), 2: round(pur, 0), 3: round(gm, 0),
         5: round(oc, 0), 6: round(nm, 0), 8: round(S(8), 0),
         25: round(cnv, 0), 27: round(dnv, 0),
         12: int(round(S(12))), 13: int(round(S(13))), 14: int(round(S(14))),

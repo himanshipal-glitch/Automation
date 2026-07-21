@@ -322,17 +322,67 @@ def _mdt(m: str):
     return pd.to_datetime("01-" + m, format="%d-%b-%y", errors="coerce")
 
 
+def _subtract_reco_from_month(df, exc_m, m, tab) -> None:
+    """Subtract the reco-EXCLUDED shipments' contribution from ONE frozen month
+    column, so a shipment the user excluded is gone even from a closed month
+    (whose value otherwise comes verbatim from the manual file). Additive rows
+    are reduced; the month's ratio/per-kg rows are recomputed. Mutates df."""
+    if exc_m is None or exc_m.empty or m not in df.columns:
+        return
+    import reports as _r
+    blk = _r._summary_block(_r._extract_key_cols(exc_m), 0.0, 0.0,
+                            qty_in_mt=(tab not in UNIT_TABS))
+    c = df.columns.get_loc(m)
+
+    def cur(i):
+        return float(pd.to_numeric(pd.Series([df.iat[i, c]]), errors="coerce").fillna(0).iloc[0])
+    # _summary_block index → df row index (df has the FY27/Old split rows inserted)
+    #   blk: 0 Qty,1 Sales,2 Pur,3 GM,5 OC,6 NM,8 OI,21 CNval,23 DNval
+    for df_i, blk_i in ((0, 0), (1, 1), (2, 2), (3, 3), (5, 5), (6, 6),
+                        (8, 8), (25, 21), (27, 23)):
+        if df_i < len(df):
+            df.iat[df_i, c] = cur(df_i) - float(blk[blk_i])
+    df.iat[0, c] = round(cur(0), 0)                         # qty stays integer
+    sales, pur = cur(1), cur(2)
+    qkg = cur(0) * (1 if tab in UNIT_TABS else 1000)
+    df.iat[4, c]  = round(100 * cur(3) / sales, 2) if sales else 0.0   # GM %
+    df.iat[7, c]  = round(100 * cur(6) / sales, 2) if sales else 0.0   # NM %
+    df.iat[9, c]  = round(sales / qkg, 2) if qkg else 0.0              # Revenue / Kg
+    df.iat[10, c] = round(pur / qkg, 2) if qkg else 0.0               # Purchase Cost / Kg
+    df.iat[26, c] = round(100 * cur(25) / sales, 2) if sales else 0.0  # CN % to Revenue
+    df.iat[28, c] = round(100 * cur(27) / pur, 2) if pur else 0.0     # DN % to Purchase
+
+
 def apply_frozen(summaries: dict, folder: str, open_month: str | None,
-                 skip_tabs: set | None = None) -> dict:
+                 skip_tabs: set | None = None,
+                 profit_df=None, reco_ships: set | None = None) -> dict:
     """Overwrite each summary's CLOSED month columns (those before `open_month`)
     with the frozen manual figures, then recompute the FY Total. The open month
     and anything after it stay live. `skip_tabs` names verticals whose frozen
     overlay is SKIPPED (their closed months are already authoritative in the
     passed data — e.g. Re-Commerce driven by its manual detail) but which STILL
-    get the FY-residual recompute and the R/P re-split. Mutates & returns."""
+    get the FY-residual recompute and the R/P re-split.
+
+    When `profit_df` + `reco_ships` are given, shipments the user excluded in the
+    Reco review are also subtracted from the frozen month they belong to — so an
+    excluded shipment is removed from the summary even in a closed month.
+    Mutates & returns."""
     fc = frozen_columns(folder)
     open_dt = _mdt(open_month) if open_month else None
     skip = skip_tabs or set()
+
+    # per-tab excluded-shipment rows (from the live detail), attributed by
+    # canon'd Broad Category so 'Metal' rows land under 'End Generator'.
+    _exc_by_tab = {}
+    if reco_ships and profit_df is not None and not getattr(profit_df, "empty", True):
+        import reports as _r
+        _sh = profit_df.iloc[:, 3].astype(str).str.strip()
+        _exc = profit_df[_sh.isin(set(reco_ships))]
+        if not _exc.empty:
+            _cat = _exc.iloc[:, 85].astype(str).map(_r._canon_label)
+            _mm = _r.parse_dates(_exc.iloc[:, 2]).dt.strftime("%b-%y")
+            for _t in _cat.unique():
+                _exc_by_tab[_t] = _exc[_cat == _t].assign(_recomon=_mm[_cat == _t])
 
     for tab, df in summaries.items():
         cells_by_month = fc.get(tab)
@@ -347,6 +397,10 @@ def apply_frozen(summaries: dict, folder: str, open_month: str | None,
                 for idx, val in cells.items():
                     if 0 <= idx < len(df):
                         df.iat[idx, cloc] = _round_cell(idx, val)
+                # remove reco-excluded shipments that belong to this frozen month
+                _et = _exc_by_tab.get(tab)
+                if _et is not None:
+                    _subtract_reco_from_month(df, _et[_et["_recomon"] == m], m, tab)
             do_recompute = True
         if do_recompute:
             _recompute_fy(df, open_month, tab)

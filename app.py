@@ -223,8 +223,8 @@ with st.container(key="rkheader"):
         loaded = [s for s, v in status.items() if v["exists"]]
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
-        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.3.0"):
-            st.caption("build: **v3.3.0 — Re-Commerce live-costed from the Amazon×Recykal Google Sheet after 17-Jul; fixed detail before it**")
+        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.3.1"):
+            st.caption("build: **v3.3.1 — Re-Commerce live-Amazon path guarded (never crashes the summary); tz-safe dates**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())
@@ -1487,11 +1487,18 @@ elif page == "Summary Report":
             if _zinv.empty:
                 _zinv = db.read_table("Inv", "raw").drop(columns=["_source_file"], errors="ignore")
             st.session_state["_amz_status"] = _amz_status
-            profit_df = reports.apply_recommerce_manual(
-                profit_df, _rc_fixed, exclude_samsung_new=False,
-                stock_df=_stock if not _stock.empty else None,
-                zoho_inv_df=_zinv if not _zinv.empty else None,
-                cutoff_date=cleaning.RECOMMERCE_AMAZON_ONLY_AFTER)
+            try:
+                profit_df = reports.apply_recommerce_manual(
+                    profit_df, _rc_fixed, exclude_samsung_new=False,
+                    stock_df=_stock if not _stock.empty else None,
+                    zoho_inv_df=_zinv if not _zinv.empty else None,
+                    cutoff_date=cleaning.RECOMMERCE_AMAZON_ONLY_AFTER)
+            except Exception as _rce:
+                # never crash the summary on the live-Amazon path — fall back to
+                # the manual-only Re-Commerce and surface why.
+                st.session_state["_amz_status"] = f"error: {_rce}"
+                profit_df = reports.apply_recommerce_manual(
+                    profit_df, _rc_fixed, exclude_samsung_new=False)
 
         import frozen as _frozen
         _app_dir = str(db.DB_DIR.parent)              # the AUTOMATION folder

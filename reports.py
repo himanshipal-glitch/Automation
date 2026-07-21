@@ -485,6 +485,26 @@ def _align_to_schema(dfm: pd.DataFrame, tgt_cols) -> pd.DataFrame:
 AMAZON_LIVE_COST_SOURCE = "Amazon x Recykal (live)"
 
 
+def _tz_naive_series(s: pd.Series) -> pd.Series:
+    """Drop any timezone from a datetime Series so naive/aware comparisons never
+    raise (parquet stores can carry tz that pickles don't)."""
+    try:
+        if getattr(s.dt, "tz", None) is not None:
+            return s.dt.tz_localize(None)
+    except (AttributeError, TypeError):
+        pass
+    return s
+
+
+def _tz_naive_ts(t):
+    try:
+        if getattr(t, "tzinfo", None) is not None:
+            return t.tz_localize(None)
+    except (AttributeError, TypeError):
+        pass
+    return t
+
+
 def build_recommerce_from_amazon(stock_df: pd.DataFrame,
                                  zoho_inv_df: pd.DataFrame,
                                  template_cols,
@@ -542,13 +562,14 @@ def build_recommerce_from_amazon(stock_df: pd.DataFrame,
                         inv2items.setdefault(k, set()).add(
                             "".join(ch for ch in str(zr[z_item]).lower() if ch.isalnum()))
 
-    cut = pd.to_datetime(cutoff_date, errors="coerce")
+    cut = _tz_naive_ts(pd.to_datetime(cutoff_date, errors="coerce"))
     rows = []
     for _, sr in stock_df.iterrows():
         inv_no = str(sr[c_inv]).strip()
         if not inv_no or inv_no.lower() == "nan" or inv_no not in inv2ship:
             continue                                    # sale not booked in Zoho RC
         sdate = pd.to_datetime(sr[c_sdate], errors="coerce") if c_sdate else pd.NaT
+        sdate = _tz_naive_ts(sdate) if pd.notna(sdate) else sdate
         if pd.notna(cut) and pd.notna(sdate) and sdate <= cut:
             continue                                    # fixed period covers it
         cat = str(sr[c_cat]).strip()
@@ -647,8 +668,8 @@ def apply_recommerce_manual(base_df: pd.DataFrame,
     # there, shipment id from the Zoho invoice). Drop ALL live-MIS RC rows —
     # they're replaced by manual(≤cutoff) + amazon(>cutoff).
     if stock_df is not None and not getattr(stock_df, "empty", True) and cutoff_date is not None:
-        _cut = pd.to_datetime(cutoff_date, errors="coerce")
-        _mdates = parse_dates(m.iloc[:, 2])
+        _cut = _tz_naive_ts(pd.to_datetime(cutoff_date, errors="coerce"))
+        _mdates = _tz_naive_series(parse_dates(m.iloc[:, 2]))
         m_fixed = m[_mdates.notna() & (_mdates <= _cut)] if pd.notna(_cut) else m
         amz = build_recommerce_from_amazon(stock_df, zoho_inv_df, base_df.columns,
                                            cutoff_date, exclude_samsung=exclude_samsung_new)

@@ -55,7 +55,8 @@ def fetch_stock(sheet_id: str | None = None, gid: str | None = None,
         r = requests.get(_csv_url(sid, gid), timeout=25, allow_redirects=True)
         ct = r.headers.get("content-type", "")
         if r.status_code == 200 and "text/html" not in ct.lower():
-            df = pd.read_csv(io.StringIO(r.text))
+            # read raw bytes as UTF-8 so the ₹ symbol / non-ASCII don't mojibake
+            df = pd.read_csv(io.BytesIO(r.content), encoding="utf-8")
             df = _normalize(df)
             if not df.empty:
                 try:

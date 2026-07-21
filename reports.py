@@ -530,13 +530,16 @@ def build_recommerce_from_amazon(stock_df: pd.DataFrame,
     c_inv = _sc("Invoice No"); c_cat = _sc("Category Name")
     c_sdate = _sc("Invoice Date.1", "Invoice Date1", "Sales Invoice Date")
     c_qty = _sc("Qty"); c_rev = _sc("Taxable Value"); c_cost = _sc("Taxable")
-    c_buyer = _sc("Buyer Name"); c_bgst = _sc("Buyer GSTIN")
     c_seller = _sc("Seller Name"); c_prod = _sc("Product title/description", "Product")
+    c_vinv = _sc("Seller Invoice No"); c_pdate = _sc("Invoice Date")   # purchase side
+    c_pqty = _sc("Purchase Qty"); c_pprice = _sc("Unit/Price")          # purchase unit price
+    c_srate = _sc("Unit/Price.1", "Unit/Price1")                        # sales unit price
+    c_hsn = _sc("HSN Code"); c_model = _sc("Model Name")
     if not all([c_inv, c_cat, c_qty, c_rev, c_cost]):
         return pd.DataFrame(columns=cols)
 
-    # Zoho RC invoices → Shipment ID (CF.SO Number); also the item set per invoice
-    inv2ship, inv2items = {}, {}
+    # Zoho RC invoices → full invoice-level fields (100% from the MIS invoice)
+    inv2z = {}
     if zoho_inv_df is not None and not getattr(zoho_inv_df, "empty", True):
         def _zc(*names):
             norm = {"".join(ch for ch in str(c).lower() if ch.isalnum()): c for c in zoho_inv_df.columns}
@@ -545,71 +548,109 @@ def build_recommerce_from_amazon(stock_df: pd.DataFrame,
                 if k in norm:
                     return norm[k]
             return None
-        z_inv = _zc("Invoice Number", "Invoice_Number")
-        z_so = _zc("CF.SO Number", "CFSO_Number", "CF_SO_Number")
-        z_item = _zc("Item Name", "Item_Name")
-        z_acc = _zc("Account")
+        z_inv = _zc("Invoice Number"); z_so = _zc("CF.SO Number", "CFSO_Number")
+        z_acc = _zc("Account"); z_cid = _zc("Customer ID"); z_cust = _zc("Customer Name")
+        z_gst = _zc("GST Identification Number (GSTIN)", "GSTIN")
+        z_disp = _zc("CF.Dispatch From"); z_city = _zc("Shipping City"); z_state = _zc("Shipping State")
+        z_eway = _zc("E-WayBill Number"); z_idate = _zc("Invoice Date"); z_branch = _zc("Branch")
         if z_inv and z_so:
             zdf = zoho_inv_df
             if z_acc:
                 zdf = zdf[zdf[z_acc].astype(str).str.contains("re-commerce|recommerce", case=False, na=False)]
+            _g = lambda zr, c: (str(zr[c]).strip() if c and c in zr and pd.notna(zr[c]) else "")
             for _, zr in zdf.iterrows():
                 k = str(zr[z_inv]).strip()
-                so = str(zr[z_so]).strip()
-                if k and k.lower() != "nan":
-                    inv2ship.setdefault(k, so)
-                    if z_item:
-                        inv2items.setdefault(k, set()).add(
-                            "".join(ch for ch in str(zr[z_item]).lower() if ch.isalnum()))
+                if k and k.lower() != "nan" and k not in inv2z:
+                    inv2z[k] = {"ship": _g(zr, z_so), "cid": _g(zr, z_cid), "buyer": _g(zr, z_cust),
+                                "gst": _g(zr, z_gst), "disp": _g(zr, z_disp), "city": _g(zr, z_city),
+                                "state": _g(zr, z_state), "eway": _g(zr, z_eway),
+                                "idate": _g(zr, z_idate), "branch": _g(zr, z_branch)}
 
     cut = _tz_naive_ts(pd.to_datetime(cutoff_date, errors="coerce"))
+
+    def _num(v):
+        # the live sheet formats money as '₹ 1,744.72' (and % as '33%') — strip
+        # any non-numeric char (currency symbol, commas, spaces, mojibake) first.
+        s = _re.sub(r"[^0-9.\-]", "", str(v))
+        try:
+            return float(s) if s not in ("", "-", ".", "-.") else 0.0
+        except ValueError:
+            return 0.0
+
+    def _set(r, pos, val):
+        # positional assignment — the engine schema has DUPLICATE column names
+        # (Amount, Month, Net Qty, Margin, …), so a dict keyed by name would
+        # collide (col 65 Margin vs col 94 Margin). Build each row as a list.
+        if pos < len(r):
+            r[pos] = val
+
+    _csc_pos = next((i for i, c in enumerate(cols)
+                     if "".join(ch for ch in str(c).lower() if ch.isalnum()) == "costsource"), None)
     rows = []
     for _, sr in stock_df.iterrows():
         inv_no = str(sr[c_inv]).strip()
-        if not inv_no or inv_no.lower() == "nan" or inv_no not in inv2ship:
+        if not inv_no or inv_no.lower() == "nan" or inv_no not in inv2z:
             continue                                    # sale not booked in Zoho RC
         sdate = pd.to_datetime(sr[c_sdate], errors="coerce") if c_sdate else pd.NaT
         sdate = _tz_naive_ts(sdate) if pd.notna(sdate) else sdate
         if pd.notna(cut) and pd.notna(sdate) and sdate <= cut:
             continue                                    # fixed period covers it
         cat = str(sr[c_cat]).strip()
-        # The Zoho invoice (matched by Invoice No) supplies the Shipment ID and
-        # confirms the sale is booked; the Amazon row (Invoice No + Category)
-        # supplies the cost & revenue and the material. Category need not match a
-        # Zoho item exactly (Amazon may use a generic category) — matching the
-        # signed-off report, every Amazon row of a booked RC invoice is kept.
         if exclude_samsung and ("samsung" in cat.lower()
                                 or (c_prod and "samsung" in str(sr[c_prod]).lower())):
             continue
-        qty = float(pd.to_numeric(pd.Series([sr[c_qty]]), errors="coerce").fillna(0).iloc[0])
-        rev = float(pd.to_numeric(pd.Series([sr[c_rev]]), errors="coerce").fillna(0).iloc[0])
-        cost = float(pd.to_numeric(pd.Series([sr[c_cost]]), errors="coerce").fillna(0).iloc[0])
+        z = inv2z[inv_no]
+        qty  = _num(sr[c_qty]); rev = _num(sr[c_rev]); cost = _num(sr[c_cost])
+        pqty = _num(sr[c_pqty]) if c_pqty else qty
         dt = sdate if pd.notna(sdate) else cut
-        r = {c: None for c in cols}
-        r[cols[0]]  = "Q" + str((dt.month - 4) % 12 // 3 + 1) if pd.notna(dt) else None
-        r[cols[1]]  = dt.strftime("%B") if pd.notna(dt) else None
-        r[cols[2]]  = dt.strftime("%Y-%m-%d") if pd.notna(dt) else None
-        r[cols[3]]  = inv2ship.get(inv_no, "")          # Shipment ID (CF.SO Number)
-        r[cols[4]]  = str(sr[c_seller]).strip() if c_seller else ""
-        r[cols[12]] = cat                                # Material = Category Name
-        r[cols[13]] = qty                                # Qty (Kg) — units for RC
-        r[cols[15]] = round(cost, 2)                     # Purchase Price (ex-GST)
-        r[cols[17]] = qty                                # Net Qty (purch)
-        r[cols[38]] = dt.strftime("%Y-%m-%d") if pd.notna(dt) else None   # Inv. Date
-        r[cols[39]] = inv_no                             # Inv. No.
-        r[cols[41]] = str(sr[c_buyer]).strip() if c_buyer else ""
-        r[cols[42]] = str(sr[c_bgst]).strip() if c_bgst else ""
-        r[cols[46]] = qty                                # Qty(Kg) sales
-        r[cols[48]] = round(rev, 2)                      # Amount (sales, ex-GST)
-        r[cols[51]] = qty                                # Net Qty (sales)
-        if len(cols) > 65:
-            r[cols[64]] = round(rev, 2)                  # Net Revenue
-            r[cols[65]] = round(rev - cost, 2)           # Margin
-        r[cols[84]] = cat                                # Category (Material)
-        r[cols[85]] = "Re-Commerce"                      # Broad Category
-        _csc = next((c for c in cols if "".join(ch for ch in str(c).lower() if ch.isalnum()) == "costsource"), None)
-        if _csc:
-            r[_csc] = AMAZON_LIVE_COST_SOURCE
+        pan = z["gst"][2:12] if len(z["gst"]) >= 12 else ""
+        r = [None] * len(cols)
+        # ── keys / dates ──
+        _set(r, 0, "Q" + str((dt.month - 4) % 12 // 3 + 1) if pd.notna(dt) else None)
+        _set(r, 1, dt.strftime("%B") if pd.notna(dt) else None)
+        _set(r, 2, dt.strftime("%Y-%m-%d") if pd.notna(dt) else None)
+        _set(r, 3, z["ship"])                                   # Shipment ID (CF.SO Number)
+        _set(r, 80, dt.strftime("%b-%y") if pd.notna(dt) else None)   # Month (mmm-yy)
+        _set(r, 83, str(dt.isocalendar().week) if pd.notna(dt) else None)  # Week No
+        # ── purchase side (Amazon) ──
+        _set(r, 4, str(sr[c_seller]).strip() if c_seller else "")     # Supplier Name (seller)
+        _set(r, 6, str(sr[c_vinv]).strip() if c_vinv else "")         # Vendor Invoice No
+        if c_pdate and pd.notna(pd.to_datetime(sr[c_pdate], errors="coerce")):
+            _set(r, 7, pd.to_datetime(sr[c_pdate], errors="coerce").strftime("%Y-%m-%d"))
+        _set(r, 12, cat)                                              # Material = Category
+        _set(r, 13, pqty)                                            # Qty (Kg) purchase
+        _set(r, 14, round(cost / pqty, 4) if pqty else round(_num(sr[c_pprice]) if c_pprice else 0, 4))
+        _set(r, 15, round(cost, 2))                                  # Purchase Price (ex-GST)
+        _set(r, 16, 0); _set(r, 17, pqty); _set(r, 18, 0)           # Return/Net Qty/Customs
+        _set(r, 28, round(cost / pqty, 4) if pqty else 0)           # Cost/Kg
+        _set(r, 29, 0); _set(r, 34, 0); _set(r, 35, 0); _set(r, 36, 0)   # diversion / DN
+        _set(r, 37, round(cost, 2))                                  # Total Cost
+        _set(r, 79, "Amazon/Clicktech")                             # Supplier Type
+        # ── invoice / sales side (Zoho MIS) ──
+        _set(r, 38, (z["idate"] or (dt.strftime("%Y-%m-%d") if pd.notna(dt) else None)))
+        _set(r, 39, inv_no)                                         # Inv. No.
+        _set(r, 40, z["cid"]); _set(r, 41, z["buyer"]); _set(r, 42, z["gst"])
+        _set(r, 43, z["disp"]); _set(r, 44, z["city"]); _set(r, 45, z["state"])
+        _set(r, 46, qty)                                            # Qty(Kg) sales
+        _set(r, 47, round(_num(sr[c_srate]), 4) if c_srate else (round(rev / qty, 4) if qty else 0))
+        _set(r, 48, round(rev, 2))                                  # Amount (sales, ex-GST)
+        _set(r, 49, "TRUE"); _set(r, 50, 0); _set(r, 51, qty); _set(r, 52, 0)
+        _set(r, 53, "Regular")
+        _set(r, 61, 0); _set(r, 62, 0); _set(r, 63, 0)             # credit notes
+        # ── margins / rollup ──
+        _mar = round(rev - cost, 2)
+        _set(r, 64, round(rev, 2)); _set(r, 65, _mar)              # Net Revenue / Margin
+        _set(r, 67, ""); _set(r, 70, round(_mar / rev, 4) if rev else 0.0)   # Remarks / Margin %
+        _set(r, 72, 0); _set(r, 73, 0); _set(r, 75, 0); _set(r, 76, 0)      # CN/DN totals
+        _set(r, 78, cat)                                            # Material-Short Form
+        _set(r, 81, round(cost, 2)); _set(r, 82, round(rev, 2))    # Cost / Revenue
+        _set(r, 85, "Re-Commerce")                                 # Broad Category
+        _set(r, 87, _mar); _set(r, 88, _mar); _set(r, 89, _mar)    # Gross/Recykal/Net Margin
+        _set(r, 90, round(rev * 1.18, 2)); _set(r, 91, round(cost * 1.18, 2))  # gst-incl Sales/Purch
+        _set(r, 92, 0); _set(r, 93, 0); _set(r, 94, round(_mar * 1.18, 2))
+        _set(r, 96, z["branch"]); _set(r, 98, pan)                 # Inv Branch / Customer PAN
+        if _csc_pos is not None:
+            r[_csc_pos] = AMAZON_LIVE_COST_SOURCE
         rows.append(r)
     return pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
 

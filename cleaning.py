@@ -9,7 +9,7 @@ import pandas as pd
 # Re-Commerce costing cutover: the signed-off report up to this date is stored/
 # frozen; MIS rows dated AFTER it are costed by the Amazon-invoice chain ONLY
 # (the older-bill-by-shipment fallback is not applied to them).
-RECOMMERCE_AMAZON_ONLY_AFTER = pd.Timestamp("2026-07-12")
+RECOMMERCE_AMAZON_ONLY_AFTER = pd.Timestamp("2026-07-17")
 
 
 def _col(df: pd.DataFrame, *candidates: str) -> str | None:

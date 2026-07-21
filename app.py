@@ -223,8 +223,8 @@ with st.container(key="rkheader"):
         loaded = [s for s, v in status.items() if v["exists"]]
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
-        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.2.5"):
-            st.caption("build: **v3.2.5 — reco exclusion flows Details → FY → July; frozen months never change**")
+        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.3.0"):
+            st.caption("build: **v3.3.0 — Re-Commerce live-costed from the Amazon×Recykal Google Sheet after 17-Jul; fixed detail before it**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())
@@ -1470,15 +1470,28 @@ elif page == "Summary Report":
         _ap = ap_df if not ap_df.empty else None
         _obills = op_bills if not op_bills.empty else None
 
-        # ── Re-Commerce: the stored FIXED report drives all rows ≤ its cutover ──
-        # (12-07-2026, signed off). Only genuinely-new MIS shipments (not in the
-        # fixed sheet) are added — those carry the live Amazon-chain cost. This
-        # runs BEFORE the Reco gate/summary so every downstream view (candidates,
-        # summary, workbook) sees the fixed rows.
+        # ── Re-Commerce: FIXED signed-off detail up to the cutover (17-07-2026);
+        # everything AFTER it is built LIVE from the Amazon × Recykal Google
+        # Sheet (cost & revenue from there, shipment id from the Zoho invoice).
+        # Runs BEFORE the Reco gate/summary so every downstream view sees it.
         _rc_fixed = db.load_recommerce_manual(True)
         if not _rc_fixed.empty:
-            profit_df = reports.apply_recommerce_manual(profit_df, _rc_fixed,
-                                                        exclude_samsung_new=False)
+            import amazon_live as _amz
+
+            @st.cache_data(ttl=180, show_spinner=False)
+            def _fetch_amazon_stock():
+                return _amz.fetch_stock()      # live Google Sheet, cached ~3 min
+
+            _stock, _amz_status = _fetch_amazon_stock()
+            _zinv = db.read_table("Inv", "cleaned").drop(columns=["_source_file"], errors="ignore")
+            if _zinv.empty:
+                _zinv = db.read_table("Inv", "raw").drop(columns=["_source_file"], errors="ignore")
+            st.session_state["_amz_status"] = _amz_status
+            profit_df = reports.apply_recommerce_manual(
+                profit_df, _rc_fixed, exclude_samsung_new=False,
+                stock_df=_stock if not _stock.empty else None,
+                zoho_inv_df=_zinv if not _zinv.empty else None,
+                cutoff_date=cleaning.RECOMMERCE_AMAZON_ONLY_AFTER)
 
         import frozen as _frozen
         _app_dir = str(db.DB_DIR.parent)              # the AUTOMATION folder
@@ -1694,6 +1707,12 @@ elif page == "Summary Report":
                            + ("; Re-Commerce from its manual detail." if _reco_skip else "."))
         except Exception:
             pass
+        _as = st.session_state.get("_amz_status")
+        if _as:
+            _icon = "🟢" if _as == "live" else ("🟠" if _as.startswith("snapshot") else "🔴")
+            st.caption(f"{_icon} Amazon × Recykal live sheet: {_as} — Re-Commerce after "
+                       f"17-Jul-2026 is costed from it (cost & revenue from the sheet, "
+                       f"shipment id from the Zoho invoice).")
 
         sum_tabs = st.tabs(list(summaries.keys()))
         for tab, (name, sdf) in zip(sum_tabs, summaries.items()):

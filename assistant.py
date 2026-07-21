@@ -114,6 +114,13 @@ RECO ITEMS REVIEW: shipments with a missing purchase bill (any vertical) are
 listed for manual review — ticked ones are excluded from the calculations and
 land on a separate "Reco Items" sheet; the summary computes after Save.
 
+RE-COMMERCE LIVE COSTING: fixed signed-off detail runs up to 17-Jul-2026;
+AFTER that, each Re-Commerce sale is costed LIVE from the Amazon x Recykal
+Google Sheet (Stock tab, read fresh each run). Per row: match Invoice No +
+Category to the Zoho invoices for the shipment id; COST (Purchase Price) and
+REVENUE (Amount) come from the sheet's ex-GST Taxable columns. No Zoho bills,
+no FIFO. The sheet must stay shared 'anyone with the link'.
+
 RE-COMMERCE has TWO views on its tab: the regular summary, plus an ADDITIVE
 "Without Samsung" summary — the same logic on the subset excluding shipments
 whose VENDOR name starts with Samsung. Its Apr/May/Jun are frozen to

@@ -482,10 +482,124 @@ def _align_to_schema(dfm: pd.DataFrame, tgt_cols) -> pd.DataFrame:
     return out
 
 
+AMAZON_LIVE_COST_SOURCE = "Amazon x Recykal (live)"
+
+
+def build_recommerce_from_amazon(stock_df: pd.DataFrame,
+                                 zoho_inv_df: pd.DataFrame,
+                                 template_cols,
+                                 cutoff_date,
+                                 exclude_samsung: bool = False) -> pd.DataFrame:
+    """Build Re-Commerce Details line items for sales AFTER `cutoff_date`, driven
+    by the live Amazon × Recykal 'Stock' sheet. Per Stock row: match its Sales
+    Invoice No (+ Category) to the Zoho invoices for the Shipment ID; take COST
+    (Purchase Price) from the Stock 'Taxable' (purchase, ex-GST) and REVENUE
+    (Amount) from 'Taxable Value' (sales, ex-GST). One row per Stock line.
+    Returns a DataFrame with `template_cols` (engine layout, positional)."""
+    cols = list(template_cols)
+    if stock_df is None or getattr(stock_df, "empty", True) or len(cols) < 86:
+        return pd.DataFrame(columns=cols)
+
+    def _sc(*names):                       # Stock column by normalized name
+        norm = {"".join(ch for ch in str(c).lower() if ch.isalnum()): c for c in stock_df.columns}
+        for n in names:
+            k = "".join(ch for ch in n.lower() if ch.isalnum())
+            if k in norm:
+                return norm[k]
+        return None
+    c_inv = _sc("Invoice No"); c_cat = _sc("Category Name")
+    c_sdate = _sc("Invoice Date.1", "Invoice Date1", "Sales Invoice Date")
+    c_qty = _sc("Qty"); c_rev = _sc("Taxable Value"); c_cost = _sc("Taxable")
+    c_buyer = _sc("Buyer Name"); c_bgst = _sc("Buyer GSTIN")
+    c_seller = _sc("Seller Name"); c_prod = _sc("Product title/description", "Product")
+    if not all([c_inv, c_cat, c_qty, c_rev, c_cost]):
+        return pd.DataFrame(columns=cols)
+
+    # Zoho RC invoices → Shipment ID (CF.SO Number); also the item set per invoice
+    inv2ship, inv2items = {}, {}
+    if zoho_inv_df is not None and not getattr(zoho_inv_df, "empty", True):
+        def _zc(*names):
+            norm = {"".join(ch for ch in str(c).lower() if ch.isalnum()): c for c in zoho_inv_df.columns}
+            for n in names:
+                k = "".join(ch for ch in n.lower() if ch.isalnum())
+                if k in norm:
+                    return norm[k]
+            return None
+        z_inv = _zc("Invoice Number", "Invoice_Number")
+        z_so = _zc("CF.SO Number", "CFSO_Number", "CF_SO_Number")
+        z_item = _zc("Item Name", "Item_Name")
+        z_acc = _zc("Account")
+        if z_inv and z_so:
+            zdf = zoho_inv_df
+            if z_acc:
+                zdf = zdf[zdf[z_acc].astype(str).str.contains("re-commerce|recommerce", case=False, na=False)]
+            for _, zr in zdf.iterrows():
+                k = str(zr[z_inv]).strip()
+                so = str(zr[z_so]).strip()
+                if k and k.lower() != "nan":
+                    inv2ship.setdefault(k, so)
+                    if z_item:
+                        inv2items.setdefault(k, set()).add(
+                            "".join(ch for ch in str(zr[z_item]).lower() if ch.isalnum()))
+
+    cut = pd.to_datetime(cutoff_date, errors="coerce")
+    rows = []
+    for _, sr in stock_df.iterrows():
+        inv_no = str(sr[c_inv]).strip()
+        if not inv_no or inv_no.lower() == "nan" or inv_no not in inv2ship:
+            continue                                    # sale not booked in Zoho RC
+        sdate = pd.to_datetime(sr[c_sdate], errors="coerce") if c_sdate else pd.NaT
+        if pd.notna(cut) and pd.notna(sdate) and sdate <= cut:
+            continue                                    # fixed period covers it
+        cat = str(sr[c_cat]).strip()
+        # The Zoho invoice (matched by Invoice No) supplies the Shipment ID and
+        # confirms the sale is booked; the Amazon row (Invoice No + Category)
+        # supplies the cost & revenue and the material. Category need not match a
+        # Zoho item exactly (Amazon may use a generic category) — matching the
+        # signed-off report, every Amazon row of a booked RC invoice is kept.
+        if exclude_samsung and ("samsung" in cat.lower()
+                                or (c_prod and "samsung" in str(sr[c_prod]).lower())):
+            continue
+        qty = float(pd.to_numeric(pd.Series([sr[c_qty]]), errors="coerce").fillna(0).iloc[0])
+        rev = float(pd.to_numeric(pd.Series([sr[c_rev]]), errors="coerce").fillna(0).iloc[0])
+        cost = float(pd.to_numeric(pd.Series([sr[c_cost]]), errors="coerce").fillna(0).iloc[0])
+        dt = sdate if pd.notna(sdate) else cut
+        r = {c: None for c in cols}
+        r[cols[0]]  = "Q" + str((dt.month - 4) % 12 // 3 + 1) if pd.notna(dt) else None
+        r[cols[1]]  = dt.strftime("%B") if pd.notna(dt) else None
+        r[cols[2]]  = dt.strftime("%Y-%m-%d") if pd.notna(dt) else None
+        r[cols[3]]  = inv2ship.get(inv_no, "")          # Shipment ID (CF.SO Number)
+        r[cols[4]]  = str(sr[c_seller]).strip() if c_seller else ""
+        r[cols[12]] = cat                                # Material = Category Name
+        r[cols[13]] = qty                                # Qty (Kg) — units for RC
+        r[cols[15]] = round(cost, 2)                     # Purchase Price (ex-GST)
+        r[cols[17]] = qty                                # Net Qty (purch)
+        r[cols[38]] = dt.strftime("%Y-%m-%d") if pd.notna(dt) else None   # Inv. Date
+        r[cols[39]] = inv_no                             # Inv. No.
+        r[cols[41]] = str(sr[c_buyer]).strip() if c_buyer else ""
+        r[cols[42]] = str(sr[c_bgst]).strip() if c_bgst else ""
+        r[cols[46]] = qty                                # Qty(Kg) sales
+        r[cols[48]] = round(rev, 2)                      # Amount (sales, ex-GST)
+        r[cols[51]] = qty                                # Net Qty (sales)
+        if len(cols) > 65:
+            r[cols[64]] = round(rev, 2)                  # Net Revenue
+            r[cols[65]] = round(rev - cost, 2)           # Margin
+        r[cols[84]] = cat                                # Category (Material)
+        r[cols[85]] = "Re-Commerce"                      # Broad Category
+        _csc = next((c for c in cols if "".join(ch for ch in str(c).lower() if ch.isalnum()) == "costsource"), None)
+        if _csc:
+            r[_csc] = AMAZON_LIVE_COST_SOURCE
+        rows.append(r)
+    return pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
+
+
 def apply_recommerce_manual(base_df: pd.DataFrame,
                             manual_df: pd.DataFrame | None,
                             known_ships: set | None = None,
-                            exclude_samsung_new: bool = False) -> pd.DataFrame:
+                            exclude_samsung_new: bool = False,
+                            stock_df: pd.DataFrame | None = None,
+                            zoho_inv_df: pd.DataFrame | None = None,
+                            cutoff_date=None) -> pd.DataFrame:
     """Drive Re-Commerce from the stored manual detail, adding only the NEW
     shipments from the live MIS. Re-Commerce rows come from `manual_df`
     (accurate cost, no Amazon×Recykal re-costing); a live MIS Re-Commerce row is
@@ -524,14 +638,29 @@ def apply_recommerce_manual(base_df: pd.DataFrame,
     _fix = _mdt.notna() & (_dt.isna() | (_dt.dt.strftime("%b-%y") != _mon))
     _new_dt = _dt.where(~_fix, _mdt)
     m.isetitem(2, _new_dt.dt.strftime("%Y-%m-%d").astype(object).where(_new_dt.notna(), m.iloc[:, 2]))
+    cat = base_df.iloc[:, 85].astype(str)
+    is_rc = cat.str.contains(r"re-commerce|recommerce", case=False, na=False)
+
+    # ── NEW: live Amazon × Recykal costing after the cutoff ──────────────────
+    # Fixed (≤ cutoff) rows come from the manual detail; everything AFTER the
+    # cutoff is built live from the Amazon × Recykal sheet (cost & revenue from
+    # there, shipment id from the Zoho invoice). Drop ALL live-MIS RC rows —
+    # they're replaced by manual(≤cutoff) + amazon(>cutoff).
+    if stock_df is not None and not getattr(stock_df, "empty", True) and cutoff_date is not None:
+        _cut = pd.to_datetime(cutoff_date, errors="coerce")
+        _mdates = parse_dates(m.iloc[:, 2])
+        m_fixed = m[_mdates.notna() & (_mdates <= _cut)] if pd.notna(_cut) else m
+        amz = build_recommerce_from_amazon(stock_df, zoho_inv_df, base_df.columns,
+                                           cutoff_date, exclude_samsung=exclude_samsung_new)
+        return pd.concat([base_df[~is_rc], m_fixed, amz], ignore_index=True)
+
+    # ── legacy path: manual is authoritative; add genuinely-new live RC rows ──
     known = set(known_ships) if known_ships is not None else \
         set(m.iloc[:, 3].astype(str).str.strip())
     # combo shipments ("A, B") share components with the manual's own combos —
     # compare COMPONENT-wise, else a re-combined ID double-counts sales that the
     # fixed report already carries under a different combination
     known_parts = {p.strip() for s in known for p in str(s).split(",") if p.strip()}
-    cat = base_df.iloc[:, 85].astype(str)
-    is_rc = cat.str.contains(r"re-commerce|recommerce", case=False, na=False)
     ship = base_df.iloc[:, 3].astype(str).str.strip()
     _is_known = ship.map(lambda s: any(p.strip() in known_parts
                                        for p in str(s).split(",") if p.strip()))
@@ -553,7 +682,12 @@ def rc_without_samsung(profit_df: pd.DataFrame) -> pd.DataFrame:
     cat = profit_df.iloc[:, 85].astype(str)
     is_rc = cat.str.contains(r"re-commerce|recommerce", case=False, na=False)
     sup = profit_df.iloc[:, 4].astype(str).str.strip().str.lower()
-    return profit_df[~(is_rc & sup.str.startswith("samsung"))]
+    # Samsung detected on the VENDOR (manual/MIS rows) OR the MATERIAL/category
+    # (Amazon-live rows carry the seller as Clicktech, so their Samsung items are
+    # only recognisable by the category, e.g. 'Samsung smartphones').
+    mat = profit_df.iloc[:, 12].astype(str).str.lower()
+    _samsung = sup.str.startswith("samsung") | mat.str.contains("samsung", na=False)
+    return profit_df[~(is_rc & _samsung)]
 
 
 def _itad_reco_mask(df: pd.DataFrame) -> pd.Series:

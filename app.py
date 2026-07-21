@@ -223,8 +223,8 @@ with st.container(key="rkheader"):
         loaded = [s for s, v in status.items() if v["exists"]]
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
-        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.1.9"):
-            st.caption("build: **v3.1.9 — GitHub sync failures now say WHY (exact API error); blank editor rows not flagged**")
+        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.2.0"):
+            st.caption("build: **v3.2.0 — Summary: mail section fixed (cross-platform date; workbook-build guards); Reco review shown only before calc (collapsed after)**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())
@@ -1705,38 +1705,49 @@ elif page == "Summary Report":
                     st.dataframe(_rc_ns, use_container_width=True, hide_index=True, height=640)
                 safe = name.replace("(", "_").replace(")", "").replace("/", "-").replace(" ", "_")
                 if name != "All Categories":
-                    st.download_button(
-                        f"⬇ Download {name} (Excel — Summary · Receivables · Payables · Report)",
-                        reports.combined_workbook(summaries, _sel_pdf, _ar, _ap, vertical=name, reco_ships=reco_ships,
-                                                  rc_ns_summary=_rc_ns if name == "Re-Commerce" else None),
-                        file_name=f"profitability_{safe}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        key=f"dl_comb_{name}",
-                    )
+                    try:
+                        _wb_v = reports.combined_workbook(
+                            summaries, _sel_pdf, _ar, _ap, vertical=name, reco_ships=reco_ships,
+                            rc_ns_summary=_rc_ns if name == "Re-Commerce" else None)
+                        st.download_button(
+                            f"⬇ Download {name} (Excel — Summary · Receivables · Payables · Report)",
+                            _wb_v, file_name=f"profitability_{safe}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key=f"dl_comb_{name}",
+                        )
+                    except Exception as _we:
+                        st.warning(f"Couldn't build the {name} workbook: {_we}")
 
-        # ── Reco Items review box (under the summary) — always shown ────────────
-        st.markdown("---")
+        # ── Reco Items — the review is a GATE shown BEFORE the summary (above).
+        # After the summary is computed we no longer show the full table (it was
+        # appearing twice and pushing the email section out of view); the
+        # selection can still be revised from a collapsed expander.
         if len(_cand):
+            st.markdown("---")
             _in_reco = len(reco_ships)
-            st.caption(f"🧾 {_in_reco} of {len(_cand)} candidate shipment(s) currently in "
-                       f"Reco Items (excluded); the rest are included in the calculations.")
-        _render_reco_review(suffix="_bottom")
+            with st.expander(f"🧾 Reco Items — {_in_reco} of {len(_cand)} excluded "
+                             f"(click to revise the selection)", expanded=False):
+                _render_reco_review(suffix="_bottom")
 
         st.markdown("---")
-        # One "Download ALL" for the single report (all shipments incl. Samsung)
+        # One "Download ALL" for the single report (all shipments incl. Samsung).
+        # Guarded so a workbook build error can never hide the email section below.
         for _lbl, _pdf in _variants.items():
-            _s = summaries if _lbl == _sel else _build(_pdf)
             _sfx = "" if _lbl == "Report" else f" — {_lbl}"
             _fn = "profitability_all" + ("" if _lbl == "Report"
                                          else "_" + _lbl.lower().replace(" ", "_")) + ".xlsx"
-            st.download_button(
-                f"⬇ Download ALL Verticals{_sfx} (Excel — Summary · Receivables · Payables · Report)",
-                reports.combined_workbook(_s, _pdf, _ar, _ap, reco_ships=reco_ships,
-                                          rc_ns_summary=_rc_ns),
-                file_name=_fn,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key=f"dl_all_{_lbl}",
-            )
+            try:
+                _s = summaries if _lbl == _sel else _build(_pdf)
+                _wb_all = reports.combined_workbook(_s, _pdf, _ar, _ap, reco_ships=reco_ships,
+                                                    rc_ns_summary=_rc_ns)
+                st.download_button(
+                    f"⬇ Download ALL Verticals{_sfx} (Excel — Summary · Receivables · Payables · Report)",
+                    _wb_all, file_name=_fn,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key=f"dl_all_{_lbl}",
+                )
+            except Exception as _we:
+                st.warning(f"Couldn't build the ALL-verticals workbook ({_lbl}): {_we}")
 
         # ── Email the report to the team ──────────────────────────────────────
         st.markdown("---")
@@ -1754,7 +1765,11 @@ elif page == "Summary Report":
         _p_to = _pd_all.max()
         _p_from = pd.Timestamp(_p_to.year if _p_to.month >= 4 else _p_to.year - 1, 4, 1) \
             if pd.notna(_p_to) else None
-        _period = (f"{_p_from.strftime('%B %#d, %Y')} and {_p_to.strftime('%B %#d, %Y')}"
+        # NB: build the day with .day (NOT strftime '%#d'/'%-d' — those are
+        # platform-specific: '%#d' is Windows-only and raises on the hosted
+        # Linux app, which was breaking the whole "Send to team" section).
+        _period = (f"{_p_from.strftime('%B')} {_p_from.day}, {_p_from.year} and "
+                   f"{_p_to.strftime('%B')} {_p_to.day}, {_p_to.year}"
                    if _p_from is not None else "the period")
 
         _to = st.text_input("Recipients (comma-separated)",

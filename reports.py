@@ -565,10 +565,17 @@ def _itad_reco_mask(df: pd.DataFrame) -> pd.Series:
     # "Cost_Source"), so match on alphanumerics only
     cs_col = next((c for c in df.columns
                    if "".join(ch for ch in str(c).lower() if ch.isalnum()) == "costsource"), None)
-    if cs_col is None:
-        return pd.Series(False, index=df.index)
-    cs = df[cs_col].astype(str).str.strip().str.lower()
-    return cs.isin(["", "nan", "none", "no cost found"])
+    _missing = (df[cs_col].astype(str).str.strip().str.lower().isin(
+        ["", "nan", "none", "no cost found"]) if cs_col is not None
+        else pd.Series(False, index=df.index))
+    # End Generator: shipments whose VENDOR INVOICE NUMBER contains 'DN' are also
+    # flagged for the manual Reco review, so the user decides whether to keep
+    # them in the Details sheet. Positional: 6 = Vendor Invoice No., 85 = Broad Category.
+    _cat = df.iloc[:, 85].astype(str).map(_canon_label) if df.shape[1] > 85 else pd.Series("", index=df.index)
+    _vinv = df.iloc[:, 6].astype(str) if df.shape[1] > 6 else pd.Series("", index=df.index)
+    _eg_dn = (_cat.str.contains("end generator|metal", case=False, na=False)
+              & _vinv.str.upper().str.contains("DN", na=False))
+    return _missing | _eg_dn
 
 
 def reco_candidates(profit_df: pd.DataFrame) -> pd.DataFrame:

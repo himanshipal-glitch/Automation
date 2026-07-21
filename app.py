@@ -223,8 +223,8 @@ with st.container(key="rkheader"):
         loaded = [s for s, v in status.items() if v["exists"]]
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
-        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.2.2"):
-            st.caption("build: **v3.2.2 — AFR operational cost (service charges, own Details table) + Transport Charges as transport; summary qty rounded to integer**")
+        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.2.3"):
+            st.caption("build: **v3.2.3 — End Generator DN-invoice shipments added to the Reco review (user decides to keep/exclude)**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())

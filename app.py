@@ -223,8 +223,8 @@ with st.container(key="rkheader"):
         loaded = [s for s, v in status.items() if v["exists"]]
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
-        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.2.0"):
-            st.caption("build: **v3.2.0 — Summary: mail section fixed (cross-platform date; workbook-build guards); Reco review shown only before calc (collapsed after)**")
+        with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.2.1"):
+            st.caption("build: **v3.2.1 — Details sheet reflects the latest MIS (merged with store); Margin % shown as true percent**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())

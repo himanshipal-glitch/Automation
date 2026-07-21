@@ -498,6 +498,31 @@ def load_profit_details() -> pd.DataFrame:
     return pd.DataFrame()
 
 
+def profit_details_view(current_df: pd.DataFrame) -> pd.DataFrame:
+    """Accumulated store MERGED with the current run's rows (current wins on the
+    Shipment+Inv key), WITHOUT persisting. So a workbook's Details sheet always
+    reflects the LATEST upload plus history for months that dropped out of the
+    rolling MIS — even if upsert_profit_details hasn't run yet this session.
+    Alignment is POSITIONAL (both are the fixed engine layout) so the session's
+    sanitized column names don't misalign against the store's names."""
+    cur = load_profit_details()
+    if current_df is None or getattr(current_df, "empty", True):
+        return cur
+    new = current_df.copy().drop(columns=["_source_file"], errors="ignore")
+    if cur.empty:
+        new.columns = _uniq_cols([str(c) for c in new.columns])
+        return new
+    if new.shape[1] == cur.shape[1]:
+        new.columns = list(cur.columns)          # align by position, store names win
+    else:
+        new.columns = _uniq_cols([str(c) for c in new.columns])
+    keep = cur[~_profit_key(cur).isin(set(_profit_key(new)))]
+    allc = list(cur.columns) + [c for c in new.columns if c not in cur.columns]
+    keep = keep.reindex(columns=allc)
+    new = new.reindex(columns=allc)
+    return pd.concat([keep, new], ignore_index=True)
+
+
 def profit_details_count() -> int:
     return len(load_profit_details())
 

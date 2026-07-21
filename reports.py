@@ -1591,12 +1591,22 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
             _acc = _dbm.load_profit_details()
         except Exception:
             _acc, _dbm = None, None
-        if _acc is not None and len(_acc):
-            _live_src = _acc
-        else:
-            _live_src = profit_df.copy()
-            if _dbm is not None:      # de-duplicate repeated column names
-                _live_src.columns = _dbm._uniq_cols(_live_src.columns)
+        # Details = accumulated store MERGED with the CURRENT upload (current
+        # wins) so every bill from the latest MIS shows, not just what the store
+        # last captured — while history for dropped-out months is retained.
+        _live_src = None
+        if _dbm is not None:
+            try:
+                _live_src = _dbm.profit_details_view(profit_df)
+            except Exception:
+                _live_src = None
+        if _live_src is None or not len(_live_src):
+            if _acc is not None and len(_acc):
+                _live_src = _acc
+            else:
+                _live_src = profit_df.copy()
+                if _dbm is not None:      # de-duplicate repeated column names
+                    _live_src.columns = _dbm._uniq_cols(_live_src.columns)
         # Enterprise Custom Duty bills: the accumulated store is written at
         # upload time — BEFORE the Summary page injects them — so they must be
         # injected here too, or the sheet wouldn't carry the line items the
@@ -1732,6 +1742,14 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
         # "Metal" in Broad Category — show the current vertical name.
         if "Broad Category" in _rep.columns:
             _rep["Broad Category"] = _rep["Broad Category"].map(_canon_label)
+
+        # Margin (%) is stored as a FRACTION (0.09 = 9%); scale to a percent
+        # NUMBER so the '0.00"%"' format renders 9.00%, not 0.09%. Keep '%' in
+        # the normalized key so "Margin (%)" matches but the absolute "Margin"
+        # column does not.
+        for _mc in _rep.columns:
+            if "".join(ch for ch in str(_mc).lower() if ch.isalnum() or ch == "%") == "margin%":
+                _rep[_mc] = pd.to_numeric(_rep[_mc], errors="coerce") * 100
 
         # Move orphan shipments (Service Charges, etc. with blank Shipment ID) to the bottom
         if "Shipment ID" in _rep.columns:

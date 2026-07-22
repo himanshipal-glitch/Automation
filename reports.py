@@ -907,9 +907,11 @@ def reco_candidates(profit_df: pd.DataFrame) -> pd.DataFrame:
                    "Amount": "sum", "Purchase Price": "sum",
                    "Missing Side": lambda x: _uniq_join(x) or "Bill (purchase) missing"}))[cols]
     # A merged blank-shipment line that now carries BOTH a sale and a purchase is
-    # no longer "missing" a side — label it so the reviewer isn't misled.
-    _both = (out["Shipment ID"].str.strip() == "") & (out["Amount"] != 0) & (out["Purchase Price"] != 0)
-    out.loc[_both, "Missing Side"] = "Bill + Invoice matched by material (blank shipment)"
+    # COMPLETE — its bill and invoice legs found each other by material, so nothing
+    # is missing and it is NOT a reco item. Drop it from the review entirely; it
+    # still flows into Details/summary as the genuine two-sided transaction it is.
+    _complete = (out["Shipment ID"].str.strip() == "") & (out["Amount"] != 0) & (out["Purchase Price"] != 0)
+    out = out[~_complete]
     return out.sort_values(["Vertical", "Shipment ID", "Invoice No", "Material"],
                            ignore_index=True)
 

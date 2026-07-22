@@ -224,7 +224,7 @@ with st.container(key="rkheader"):
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
         with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.3.4"):
-            st.caption("build: **v3.10.0 — Manual line items now expose the FULL raw-input column set (all non-derived Details fields); the engine computes every derived column (Purchase/Amount/Net Qty/Total Cost/Net Revenue/Margins/GST) in real time. Per-row Qty Unit toggle (Display MT/units vs Kg). Stored per-vertical until edited; no auto-provision. Reco review: blank-shipment charge legs (bill + invoice) that match by material are a COMPLETE transaction, so they're dropped from the review (they stay in Details/summary); only genuinely one-sided blank-shipment items remain. DN provision base is now (Purchase Price + Transportation Charges) × rate, not Purchase Price alone (all verticals with a provision). Invoice-line matching keyed by shipment+material+INVOICE NO, so same-shipment/same-material lines on different invoices (e.g. End Generator resell, SH072616016) stay separate instead of being summed. M4 quantity now counts UNITS (like IT AD/Re-Commerce), not MT — fixes M4 FY-total quantity (was collapsing to ~0 via Kg÷1000 vs the frozen unit count). Receivables vertical from the Account Transactions sheet (VLOOKUP transaction_number→entity_number→account_name), prefix logic only as fallback for txns absent there. 8th sheet ingested. IB warehouse/B2B split unchanged. AFR 2.5% provision; editable per-vertical provision %; Reco per-line exclusion.**")
+            st.caption("build: **v3.10.1 — Manual line items: each input column shows its expected format (Date YYYY-MM-DD/DD-MM-YYYY, numbers plain, Qty per Qty-Unit) via column tooltips + a format legend. Full raw-input column set (all non-derived Details fields); the engine computes every derived column (Purchase/Amount/Net Qty/Total Cost/Net Revenue/Margins/GST) in real time. Per-row Qty Unit toggle (Display MT/units vs Kg). Stored per-vertical until edited; no auto-provision. Reco review: blank-shipment charge legs (bill + invoice) that match by material are a COMPLETE transaction, so they're dropped from the review (they stay in Details/summary); only genuinely one-sided blank-shipment items remain. DN provision base is now (Purchase Price + Transportation Charges) × rate, not Purchase Price alone (all verticals with a provision). Invoice-line matching keyed by shipment+material+INVOICE NO, so same-shipment/same-material lines on different invoices (e.g. End Generator resell, SH072616016) stay separate instead of being summed. M4 quantity now counts UNITS (like IT AD/Re-Commerce), not MT — fixes M4 FY-total quantity (was collapsing to ~0 via Kg÷1000 vs the frozen unit count). Receivables vertical from the Account Transactions sheet (VLOOKUP transaction_number→entity_number→account_name), prefix logic only as fallback for txns absent there. 8th sheet ingested. IB warehouse/B2B split unchanged. AFR 2.5% provision; editable per-vertical provision %; Reco per-line exclusion.**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())
@@ -1682,17 +1682,42 @@ elif page == "Summary Report":
                        "Enterprise vs Processing Center is decided by the Shipment ID "
                        "(SH… → Enterprise). Rows **stay stored** until edited. Date: any format.")
             st.caption(_durability_note)
+            st.caption("**Formats** — **Date** columns: `YYYY-MM-DD` or `DD-MM-YYYY` "
+                       "(e.g. `2026-07-05` or `05-07-2026`). **Amounts / rates**: plain "
+                       "numbers, no ₹ or commas (e.g. `150000`). **Quantity** columns: the "
+                       "number is read in the unit picked in **Qty Unit**. Required per row: "
+                       "**Vertical** + **Date** + at least one number.")
             _ml_seed = _ml_store if not _ml_store.empty else pd.DataFrame(
                 {c: pd.Series(dtype=("float" if c in _ml_numset else "str")) for c in _ml_cols})
+            # per-column type + format tooltip, driven by each field's dtype
+            _ml_dtypes = {lbl: d for lbl, _p, d in reports.MANUAL_INPUT_FIELDS}
+            _ml_colcfg = {
+                "Vertical": st.column_config.SelectboxColumn(
+                    "Vertical", options=reports.MANUAL_VERTICAL_OPTIONS, required=True,
+                    help="Which vertical this line belongs to (Enterprise/Processing Center "
+                         "split by the Shipment ID)."),
+                "Qty Unit": st.column_config.SelectboxColumn(
+                    "Qty Unit", options=reports.MANUAL_QTY_UNIT_OPTIONS,
+                    default=reports.MANUAL_QTY_UNIT_OPTIONS[0],
+                    help="How the two Qty columns are read: Display = MT (weight verticals) / "
+                         "units (IT AD, Re-Commerce, M4); or raw Kg."),
+            }
+            for _lbl, _dk in _ml_dtypes.items():
+                if _lbl in _ml_colcfg:
+                    continue
+                if _dk == "num":
+                    _ml_colcfg[_lbl] = st.column_config.NumberColumn(
+                        _lbl, help="Number only — no ₹ or commas (e.g. 150000).")
+                elif _dk == "qty":
+                    _ml_colcfg[_lbl] = st.column_config.NumberColumn(
+                        _lbl, help="Quantity — read in the unit chosen in 'Qty Unit' "
+                                   "(MT/units, or Kg).")
+                elif _dk == "date":
+                    _ml_colcfg[_lbl] = st.column_config.TextColumn(
+                        _lbl, help="Date — YYYY-MM-DD or DD-MM-YYYY (e.g. 2026-07-05).")
             _ml_res = st.data_editor(
                 _ml_seed, num_rows="dynamic", use_container_width=True, key="ml_editor",
-                column_config={
-                    "Vertical": st.column_config.SelectboxColumn(
-                        "Vertical", options=reports.MANUAL_VERTICAL_OPTIONS, required=True),
-                    "Qty Unit": st.column_config.SelectboxColumn(
-                        "Qty Unit", options=reports.MANUAL_QTY_UNIT_OPTIONS,
-                        default=reports.MANUAL_QTY_UNIT_OPTIONS[0]),
-                })
+                column_config=_ml_colcfg)
             _m2 = st.session_state.pop("ml_save_msg", None)
             if _m2:
                 (st.warning if "⚠" in _m2 else st.success)(_m2)

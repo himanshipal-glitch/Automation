@@ -464,8 +464,9 @@ def frozen_details(folder: str) -> dict:
     return out
 
 
-# verticals that count UNITS (per-kg maths uses qty as-is); the rest are MT (×1000)
-UNIT_TABS = {"IT AD", "Re-Commerce"}
+# verticals that count UNITS (per-kg maths uses qty as-is); the rest are MT (×1000).
+# M4 is a units/device line (like IT AD / Re-Commerce) — must match reports._UNIT_TABS.
+UNIT_TABS = {"IT AD", "Re-Commerce", "M4"}
 
 
 def _recompute_fy(df: pd.DataFrame, open_month: str | None, tab: str = "") -> None:

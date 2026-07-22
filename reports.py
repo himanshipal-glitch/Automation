@@ -1534,8 +1534,11 @@ def summaries_by_category(profit_df: pd.DataFrame,
     # global data cutoff — every tab shares the same Apr→cutoff month axis
     _axis_end = pd.to_datetime(profit_df.iloc[:, 2], errors="coerce").max()
 
-    # verticals that count UNITS; everything else displays quantity in MT (Kg÷1000)
-    _UNIT_TABS = {"itad", "recommerce"}
+    # verticals that count UNITS; everything else displays quantity in MT (Kg÷1000).
+    # M4 (like IT AD / Re-Commerce) is a device/units line — its Zoho quantity is a
+    # raw count, and the manual reports it as-is (NOT Kg÷1000). Dividing it by 1000
+    # made the live FY total ~0 while the frozen months stayed at their unit count.
+    _UNIT_TABS = {"itad", "recommerce", "m4"}
     def _mt(tab: str) -> bool:
         return "".join(ch for ch in str(tab).lower() if ch.isalnum()) not in _UNIT_TABS
 

@@ -432,6 +432,45 @@ def load_enterprise_opcost() -> dict:
             zip(d.iloc[:, 0], pd.to_numeric(d.iloc[:, 1], errors="coerce").fillna(0))}
 
 
+# ── CN/DN provision-rate overrides ────────────────────────────────────────────
+# Per-vertical provision % the user sets on the Summary page. Persisted (with
+# GitHub write-through) so it survives hosted restarts, and read by
+# compute.build_profitability. Stored as FRACTIONS (0.0455 = 4.55%).
+PROVISION_RATES_PATH = PERSIST_DIR / "provision_rates.parquet"
+
+
+def save_provision_rates(rates: dict) -> int:
+    """Full snapshot — replaces. {Vertical: rate_fraction}. Non-numeric or
+    negative rates are dropped (never stored silently as garbage)."""
+    global LAST_SAVE_DROPPED
+    LAST_SAVE_DROPPED = []
+    clean: dict[str, float] = {}
+    for k, v in (rates or {}).items():
+        try:
+            r = float(v)
+        except (TypeError, ValueError):
+            LAST_SAVE_DROPPED.append(f"'{k}' / rate '{v}'")
+            continue
+        if r < 0:
+            LAST_SAVE_DROPPED.append(f"'{k}' / rate '{v}' (negative)")
+            continue
+        clean[str(k).strip()] = r
+    d = pd.DataFrame({"Vertical": list(clean.keys()),
+                      "Rate": list(clean.values())})
+    return _save_small(d, PROVISION_RATES_PATH,
+                       sync_msg="Update CN/DN provision rates (app entry)")
+
+
+def load_provision_rates() -> dict:
+    """{Vertical: rate_fraction}; empty dict if never set (compute then uses
+    its DEFAULT_PROVISION_RATES)."""
+    d = _load_small(PROVISION_RATES_PATH)
+    if d.empty:
+        return {}
+    return {str(v).strip(): float(r) for v, r in
+            zip(d.iloc[:, 0], pd.to_numeric(d.iloc[:, 1], errors="coerce").fillna(0))}
+
+
 # ── Accumulated profitability-details store (permanent) ──────────────────────
 # Zoho's MIS export is ROLLING — each one only carries recent invoices, so a
 # month's line rows vanish from later exports. This store accumulates every
@@ -607,6 +646,7 @@ SHEET_DB_MAP = {
     "CN":           "cn",
     "DN":           "dn",
     "Inv":          "inv",
+    "AcctTxn":      "accttxn",
     "Query result": "query_result",
     "Sheet1 (2)":   "sheet1_2",
     "P&L":          "pnl",

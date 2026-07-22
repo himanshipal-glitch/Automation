@@ -7,8 +7,11 @@ Mechanic (reverse-engineered & validated to the rupee against the manual books):
     Net Receivable (per vertical) = Σ balance  −  Σ unused credits  −  Σ legacy
 
 where, for each vertical:
-  • rows are attributed by the INVOICE-NUMBER prefix (the manual's "Check"),
-    e.g. 36/MPMET/.. → End Generator, ../MPRE../REW → ReWerse, ../MPREC|REC../ → Re-Commerce.
+  • rows are attributed via the Zoho ACCOUNT TRANSACTIONS sheet: VLOOKUP the AR
+    transaction_number against entity_number and read the vertical off account_name
+    (e.g. "Marketplace Sales (Metal)" → End Generator). Transactions absent from
+    that sheet (older invoices) fall back to the invoice-number-prefix rule
+    (36/MPMET/.. → End Generator, ../MPPET/.. → Plastic, …).
 
     The builder subtracts BOTH unused credits and a hardcoded "Legacy outstanding"
     for the verticals that carry one (End Generator & Plastic). Everyone else: legacy = 0.
@@ -58,6 +61,27 @@ LEGACY_CUSTOMERS = {
 }
 
 
+# ── Account-Transactions attribution (the authoritative source) ──────────────
+# The Zoho "Account Transactions" sheet ties each document (entity_number) to its
+# ledger account_name, e.g. "Marketplace Sales (Metal)". That parenthetical token
+# is the TRUE vertical for the transaction. We VLOOKUP the AR transaction_number
+# against entity_number and read the vertical off account_name — replacing the old
+# invoice-prefix guess (MPPET→Plastic etc.). The parenthetical token maps to the
+# SAME vertical keys the prefix map uses, so everything downstream is unchanged.
+ACCT_NAME_TO_VERTICAL = {
+    "metal": "End Generator",          "end generator": "End Generator",
+    "plastic": "Plastic",
+    "rewerse": "ReWerse",
+    "re-commerce": "Re-Commerce",      "recommerce": "Re-Commerce",
+    "it ad": "ITAD",                   "itad": "ITAD",
+    "institutional business": "IB",    "ib": "IB",
+    "afr": "AFR",
+    "m4": "M4",
+    # Tokens with no reported vertical (M3, Paper, …) are intentionally absent →
+    # they resolve to None and fall through to the prefix / "(other)" bucket.
+}
+
+
 def _prefix(txn: str) -> str:
     m = re.match(r"^\d+/([A-Za-z0-9\-]+)/", str(txn))
     return m.group(1).upper() if m else ""
@@ -67,6 +91,46 @@ def _attribute_vertical(prefix: pd.Series, cust_upper: pd.Series) -> pd.Series:
     """Map invoice prefix → vertical, with the Black Gold override: an ITAD
     invoice (MITAD/IAD) billed to Black Gold is a Re-Commerce sale, not ITAD."""
     v = prefix.map(PREFIX_TO_VERTICAL)
+    bg = cust_upper.str.contains("BLACK GOLD", na=False)
+    v = v.mask(v.eq("ITAD") & bg, "Re-Commerce")
+    return v
+
+
+def _acct_txn_lookup(acct_txn_df: pd.DataFrame | None) -> dict:
+    """{normalized entity_number → canonical vertical} from the Account
+    Transactions sheet. Key is normalized (case/separator-insensitive) so minor
+    formatting differences between the AR and Account-Transactions exports don't
+    break the join. Unknown account_name tokens map to None (skipped)."""
+    if acct_txn_df is None or getattr(acct_txn_df, "empty", True):
+        return {}
+    ent = _col(acct_txn_df, "entity_number", "entity number", "entity_no", "entity")
+    an  = _col(acct_txn_df, "account_name", "account name", "account")
+    if ent is None or an is None:
+        return {}
+    keys = acct_txn_df[ent].astype(str).map(_norm)
+    tok  = (acct_txn_df[an].astype(str).str.extract(r"\((.*?)\)", expand=False)
+            .fillna("").str.strip().str.lower())
+    vert = tok.map(ACCT_NAME_TO_VERTICAL)
+    out: dict = {}
+    for k, v in zip(keys, vert):
+        if k and k not in out and pd.notna(v):
+            out[k] = v          # first occurrence wins (entities repeat per line)
+    return out
+
+
+def _row_verticals(txn: pd.Series, cust_upper: pd.Series,
+                   acct_txn_df: pd.DataFrame | None) -> pd.Series:
+    """Vertical per AR row: the Account-Transactions account_name where the
+    transaction is found there (authoritative), else the invoice-prefix fallback
+    (for older invoices absent from the Account-Transactions export). The Black
+    Gold ITAD→Re-Commerce override applies to both paths."""
+    prefix_v = _attribute_vertical(txn.map(_prefix), cust_upper)
+    lut = _acct_txn_lookup(acct_txn_df)
+    if lut:
+        acct_v = txn.map(_norm).map(lut)
+        v = acct_v.where(acct_v.notna(), prefix_v)
+    else:
+        v = prefix_v
     bg = cust_upper.str.contains("BLACK GOLD", na=False)
     v = v.mask(v.eq("ITAD") & bg, "Re-Commerce")
     return v
@@ -94,9 +158,14 @@ def _col(df: pd.DataFrame, *names: str) -> str | None:
     return None
 
 
-def build_receivables(ar_df: pd.DataFrame) -> dict:
+def build_receivables(ar_df: pd.DataFrame, acct_txn_df: pd.DataFrame | None = None) -> dict:
     """Return {'detail': DataFrame of every attributed row,
-              'summary': DataFrame one row per vertical with the net build-up}."""
+              'summary': DataFrame one row per vertical with the net build-up}.
+
+    `acct_txn_df` is the Zoho Account Transactions sheet; when supplied, each AR
+    row's vertical is taken from its account_name (VLOOKUP transaction_number →
+    entity_number), falling back to the invoice-prefix rule only for transactions
+    not present there. See _row_verticals."""
     df = ar_df.copy()
     txn = _col(df, "transaction_number", "transaction number")
     bal = _col(df, "balance")
@@ -108,7 +177,7 @@ def build_receivables(ar_df: pd.DataFrame) -> dict:
 
     df["_prefix"] = df[txn].map(_prefix)
     df["_cust"] = df[cust].astype(str).str.upper()
-    df["_vertical"] = _attribute_vertical(df["_prefix"], df["_cust"]).fillna("(other business lines)")
+    df["_vertical"] = _row_verticals(df[txn], df["_cust"], acct_txn_df).fillna("(other business lines)")
     df["_balance"] = pd.to_numeric(df[bal], errors="coerce").fillna(0.0)
     df["_unused"] = pd.to_numeric(df[unused], errors="coerce").fillna(0.0) if unused else 0.0
 
@@ -138,7 +207,7 @@ def build_receivables(ar_df: pd.DataFrame) -> dict:
     return {"detail": detail, "summary": summary}
 
 
-def receivables_workbook(ar_df: pd.DataFrame) -> bytes:
+def receivables_workbook(ar_df: pd.DataFrame, acct_txn_df: pd.DataFrame | None = None) -> bytes:
     """Build an .xlsx (bytes) with one sheet per reporting vertical, in the manual's
     Receivables layout: detail rows + Check + the Unused-credits and Legacy helper
     blocks, with the Net = Total − Unused − Legacy build-up at the top."""
@@ -155,7 +224,7 @@ def receivables_workbook(ar_df: pd.DataFrame) -> bytes:
     df["_un"]   = pd.to_numeric(df[un_c], errors="coerce").fillna(0.0) if un_c else 0.0
     df["_cust"] = df[cust].astype(str)
     df["_custU"] = df["_cust"].str.upper()
-    df["_vertical"] = _attribute_vertical(df["_prefix"], df["_custU"])
+    df["_vertical"] = _row_verticals(df[txn], df["_custU"], acct_txn_df)
 
     wb = Workbook(); wb.remove(wb.active)
     bold = Font(bold=True)

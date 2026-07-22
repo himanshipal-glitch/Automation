@@ -128,6 +128,22 @@ MANUALLY_EXCLUDED_SHIPMENTS: set = set()
 FAKE_DN_SHIPMENTS: set = {"SH032616011"}
 FAKE_DN_CATEGORY = "Fake DN (Excluded)"
 
+# ── CN/DN provision rates ─────────────────────────────────────────────────────
+# Default provision rate per Broad Category, as a FRACTION (0.0455 = 4.55%).
+# Applied to Sale Amount (Provision for CN) and Purchase Price (Provision for DN).
+# The user can override these per-vertical from the Summary page (persisted via
+# database.save_provision_rates); build_profitability takes the override dict.
+# ReWerse is OUT OF SCOPE (popped from every summary) but keeps its rate so the
+# raw report stays internally consistent — it is NOT shown in the editor.
+DEFAULT_PROVISION_RATES: dict[str, float] = {
+    "End Generator": 0.0455,
+    "Plastic":       0.025,
+    "AFR":           0.025,
+    "ReWerse":       0.025,
+}
+# In-scope verticals whose provision the user may edit in the UI.
+EDITABLE_PROVISION_VERTICALS: list[str] = ["End Generator", "Plastic", "AFR"]
+
 
 def _safe_div(num, den, positive_only: bool = False):
     """Element-wise divide that returns 0 where the denominator is 0 (or <=0
@@ -172,7 +188,8 @@ def _fiscal_week(dates: pd.Series) -> pd.Series:
 
 def build_profitability(merged_df: pd.DataFrame,
                         logistics_df: pd.DataFrame | None = None,
-                        no_dn_shipments: set | None = None) -> pd.DataFrame:
+                        no_dn_shipments: set | None = None,
+                        provision_rates: dict | None = None) -> pd.DataFrame:
 
     d = merged_df.copy()
 
@@ -300,12 +317,16 @@ def build_profitability(merged_df: pd.DataFrame,
     #   ...AND only if the SHIPMENT has NO actual Credit Note on ANY of its rows.
     #      If any row of a shipment has a CN, the WHOLE shipment is excluded
     #      (treated like it's in the query sheet) — no provision on any of its rows.
-    # Provision rate is per Broad Category:  ReWerse 2.5%, End Generator 4.55%, Plastic 2.5%.
+    # Provision rate is per Broad Category. Defaults (ReWerse 2.5%, End Generator
+    # 4.55%, Plastic 2.5%) come from DEFAULT_PROVISION_RATES; the caller may
+    # override any of them per-vertical via `provision_rates` (fractions).
+    _rates  = {**DEFAULT_PROVISION_RATES, **(provision_rates or {})}
     _bcat   = _s(d, "Account_inv", "").astype(str)
     _rate   = pd.Series(0.0, index=d.index)
-    _rate[_bcat.str.contains("rewerse", case=False, na=False)] = 0.025
-    _rate[_bcat.str.contains("metal|end generator",   case=False, na=False)] = 0.0455
-    _rate[_bcat.str.contains("plastic", case=False, na=False)] = 0.025
+    _rate[_bcat.str.contains("rewerse", case=False, na=False)] = float(_rates.get("ReWerse", 0.0))
+    _rate[_bcat.str.contains("metal|end generator",   case=False, na=False)] = float(_rates.get("End Generator", 0.0))
+    _rate[_bcat.str.contains("plastic", case=False, na=False)] = float(_rates.get("Plastic", 0.0))
+    _rate[_bcat.str.contains("afr", case=False, na=False)] = float(_rates.get("AFR", 0.0))
     _excluded   = _s(d, "_no_dn_excluded", 0).astype(float)
     _ship_key   = _s(d, "CFSO_Number", "").astype(str).str.strip()
     _ship_has_cn = BY.groupby(_ship_key).transform("max")   # >0 if shipment has any CN

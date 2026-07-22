@@ -752,26 +752,40 @@ def rc_without_samsung(profit_df: pd.DataFrame) -> pd.DataFrame:
     return profit_df[~(is_rc & _samsung)]
 
 
+def _reco_cs_col(df: pd.DataFrame):
+    """The Cost Source column, matched on alphanumerics only — the session store
+    sanitizes names ('Cost Source' → 'Cost_Source')."""
+    return next((c for c in df.columns
+                 if "".join(ch for ch in str(c).lower() if ch.isalnum()) == "costsource"), None)
+
+
+# Cost Source markers that mean the SALES-invoice side is absent (orphan bills).
+_RECO_ORPHAN_PREFIX = "orphan bill"
+# Cost Source markers that mean the PURCHASE-bill side is absent.
+_RECO_BILL_MISSING = ("", "nan", "none", "no cost found")
+
+
 def _itad_reco_mask(df: pd.DataFrame) -> pd.Series:
-    """Rows whose shipment has a MISSING BILL (no cost source) — a purchase
-    bill was never matched. Covers ALL verticals (not just ITAD). These are
-    candidates for the manual Reco-Items review; only user-ticked shipments
-    are excluded from calculations and listed on the 'Reco Items' sheet."""
-    # normalized lookup — the session store sanitizes names ("Cost Source" →
-    # "Cost_Source"), so match on alphanumerics only
-    cs_col = next((c for c in df.columns
-                   if "".join(ch for ch in str(c).lower() if ch.isalnum()) == "costsource"), None)
-    _missing = (df[cs_col].astype(str).str.strip().str.lower().isin(
-        ["", "nan", "none", "no cost found"]) if cs_col is not None
-        else pd.Series(False, index=df.index))
-    # End Generator: shipments whose VENDOR INVOICE NUMBER contains 'DN' are also
-    # flagged for the manual Reco review, so the user decides whether to keep
-    # them in the Details sheet. Positional: 6 = Vendor Invoice No., 85 = Broad Category.
-    _cat = df.iloc[:, 85].astype(str).map(_canon_label) if df.shape[1] > 85 else pd.Series("", index=df.index)
-    _vinv = df.iloc[:, 6].astype(str) if df.shape[1] > 6 else pd.Series("", index=df.index)
-    _eg_dn = (_cat.str.contains("end generator|metal", case=False, na=False)
-              & _vinv.str.upper().str.contains("DN", na=False))
-    return _missing | _eg_dn
+    """Rows whose shipment is MISSING ONE SIDE of the trade — either the purchase
+    bill was never matched (BILL side missing → blank / 'No Cost Found') or a bill
+    has no matching sales invoice (INVOICE side missing → 'Orphan Bill …'). Both
+    leave the profitability incomplete, so they're candidates for the manual
+    Reco-Items review. Covers ALL verticals; only user-ticked LINE ITEMS are
+    excluded from calculations and listed on the 'Reco Items' sheet."""
+    cs_col = _reco_cs_col(df)
+    if cs_col is None:
+        return pd.Series(False, index=df.index)
+    cs = df[cs_col].astype(str).str.strip().str.lower()
+    bill_missing = cs.isin(list(_RECO_BILL_MISSING))    # purchase side absent
+    inv_missing  = cs.str.startswith(_RECO_ORPHAN_PREFIX)  # sales invoice absent
+    return bill_missing | inv_missing
+
+
+def _reco_missing_side(cs_series: pd.Series) -> pd.Series:
+    """Human label for WHICH side of the trade is missing, from the Cost Source."""
+    low = cs_series.astype(str).str.strip().str.lower()
+    return low.map(lambda s: "Invoice (sale) missing"
+                   if s.startswith(_RECO_ORPHAN_PREFIX) else "Bill (purchase) missing")
 
 
 def reco_candidates(profit_df: pd.DataFrame) -> pd.DataFrame:
@@ -782,12 +796,11 @@ def reco_candidates(profit_df: pd.DataFrame) -> pd.DataFrame:
     39=Inv. No., 41=Buyer Name, 48=Amount, 85=Broad Category (Vertical)."""
     mask = _itad_reco_mask(profit_df)
     cols = ["Vertical", "Shipment ID", "Invoice No", "Date", "Buyer Name",
-            "Material", "Amount", "Purchase Price", "Cost Source"]
+            "Material", "Amount", "Purchase Price", "Missing Side"]
     if not mask.any():
         return pd.DataFrame(columns=cols)
     sub = profit_df[mask]
-    _csc = next((c for c in profit_df.columns
-                 if "".join(ch for ch in str(c).lower() if ch.isalnum()) == "costsource"), None)
+    _csc = _reco_cs_col(profit_df)
     _uniq_join = lambda x: ", ".join(sorted({str(v).strip() for v in x
                                              if str(v).strip() not in ("", "nan", "None")}))
     g = pd.DataFrame({
@@ -796,28 +809,45 @@ def reco_candidates(profit_df: pd.DataFrame) -> pd.DataFrame:
         "Invoice No": sub.iloc[:, 39].astype(str).str.strip(),
         "Date": pd.to_datetime(sub.iloc[:, 2], errors="coerce").dt.strftime("%Y-%m-%d").fillna(""),
         "Buyer Name": sub.iloc[:, 41].astype(str),
-        "Material": sub.iloc[:, 12].astype(str),
+        "Material": sub.iloc[:, 12].astype(str).str.strip(),
         "Amount": pd.to_numeric(sub.iloc[:, 48], errors="coerce").fillna(0.0),
         "Purchase Price": pd.to_numeric(sub.iloc[:, 15], errors="coerce").fillna(0.0),
-        "Cost Source": (sub[_csc].astype(str) if _csc else pd.Series("", index=sub.index)),
+        # WHICH side of the trade is missing (from the Cost Source provenance).
+        "Missing Side": (_reco_missing_side(sub[_csc]) if _csc
+                         else pd.Series("Bill (purchase) missing", index=sub.index)),
     })
     # One row per (Shipment ID · Invoice No · Material) so each missing line is
     # explicit — no lumping a shipment's materials across its different invoices.
+    # This is also the EXCLUSION grain (see _reco_exclusion_mask): a ticked row
+    # excludes exactly that line item, not the whole shipment.
     out = (g.groupby(["Shipment ID", "Invoice No", "Material"], as_index=False)
              .agg({"Vertical": "first", "Date": "first", "Buyer Name": "first",
                    "Amount": "sum", "Purchase Price": "sum",
-                   "Cost Source": lambda x: _uniq_join(x) or "No Cost Found"}))[cols]
+                   "Missing Side": lambda x: _uniq_join(x) or "Bill (purchase) missing"}))[cols]
     return out.sort_values(["Vertical", "Shipment ID", "Invoice No", "Material"],
                            ignore_index=True)
 
 
+def _reco_key(df: pd.DataFrame) -> list[tuple]:
+    """The (Shipment ID · Invoice No · Material) line-item key for each row —
+    the exclusion grain, matching exactly how reco_candidates groups/displays.
+    Positional & identically transformed: 3=Shipment ID, 39=Invoice No, 12=Material."""
+    return list(zip(df.iloc[:, 3].astype(str).str.strip(),
+                    df.iloc[:, 39].astype(str).str.strip(),
+                    df.iloc[:, 12].astype(str).str.strip()))
+
+
 def _reco_exclusion_mask(df: pd.DataFrame, reco_ships: set | None) -> pd.Series:
     """Which rows are excluded as Reco Items. If `reco_ships` is given (the user's
-    saved manual selection), exclude exactly those shipments; otherwise fall back
-    to the automatic ITAD-missing-bill detection."""
+    saved manual selection — a set of (Shipment ID, Invoice No, Material) tuples),
+    exclude exactly those LINE ITEMS; otherwise fall back to the automatic
+    missing-side detection over the whole candidate set."""
     if reco_ships is None:
         return _itad_reco_mask(df)
-    return df.iloc[:, 3].astype(str).str.strip().isin(set(reco_ships))
+    sel = set(reco_ships)
+    if not sel:
+        return pd.Series(False, index=df.index)
+    return pd.Series([k in sel for k in _reco_key(df)], index=df.index)
 
 
 def split_by_category(profit_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
@@ -1394,7 +1424,8 @@ def summaries_by_category(profit_df: pd.DataFrame,
                           ar_df: pd.DataFrame | None = None,
                           ap_df: pd.DataFrame | None = None,
                           op_cost_bills: pd.DataFrame | None = None,
-                          reco_ships: set | None = None) -> dict[str, pd.DataFrame]:
+                          reco_ships: set | None = None,
+                          acct_txn_df: pd.DataFrame | None = None) -> dict[str, pd.DataFrame]:
     """
     One summary report per Broad Category — with Institutional Business
     split into Enterprise (Shipment ID starts 'SHID') and Processing Center.
@@ -1442,7 +1473,7 @@ def summaries_by_category(profit_df: pd.DataFrame,
     if ar_df is not None and not getattr(ar_df, "empty", True):
         try:
             import receivables as _recv
-            _summ = _recv.build_receivables(ar_df)["summary"]
+            _summ = _recv.build_receivables(ar_df, acct_txn_df)["summary"]
             _net_by_v = dict(zip(_summ["Vertical"], _summ["Net Receivable"]))
         except Exception:
             _net_by_v = {}
@@ -1786,7 +1817,8 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
                       vertical: str | None = None,
                       reco_ships: set | None = None,
                       rc_ns_summary: pd.DataFrame | None = None,
-                      op_cost_bills: pd.DataFrame | None = None) -> bytes:
+                      op_cost_bills: pd.DataFrame | None = None,
+                      acct_txn_df: pd.DataFrame | None = None) -> bytes:
     """One Excel with four stacked sheets — Summary, Receivables, Payables,
     Details (the profitability report). If `vertical` is given, everything is
     filtered to it; otherwise all verticals are included (stacked by type).
@@ -1825,7 +1857,7 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
 
         # ── Sheet 2: Receivables (build-up table + Legacy box + detail) ───────
         if ar_df is not None and not getattr(ar_df, "empty", True):
-            rb = _recv.build_receivables(ar_df)
+            rb = _recv.build_receivables(ar_df, acct_txn_df)
             summ, det = rb["summary"], rb["detail"]
             if vertical:
                 vn = "".join(c for c in vertical.lower() if c.isalnum())

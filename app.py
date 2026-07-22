@@ -224,7 +224,7 @@ with st.container(key="rkheader"):
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
         with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.3.4"):
-            st.caption("build: **v3.3.4 — Reco review itemized per Shipment+Invoice+Material (no more lumped materials across invoices)**")
+            st.caption("build: **v3.6.0 — Receivables vertical now from the Account Transactions sheet (VLOOKUP transaction_number→entity_number→account_name), prefix logic only as fallback for txns absent there. 8th sheet ingested. IB warehouse/B2B split unchanged. AFR 2.5% provision; editable per-vertical provision %; Reco per-line exclusion.**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())
@@ -631,7 +631,8 @@ def _auto_pipeline():
                 merged, logistics_df=bill_log if not bill_log.empty else None,
                 no_dn_shipments=db.load_no_dn_shipments()
                 | cleaning.void_dn_shipments(
-                    db.read_table("DN", "raw").drop(columns=["_source_file"], errors="ignore")))
+                    db.read_table("DN", "raw").drop(columns=["_source_file"], errors="ignore")),
+                provision_rates=db.load_provision_rates() or None)
             db.write_table(merged,  "Merged", "inv_bill_cn_dn")
             db.write_table(profit,  "Merged", "profitability")
             # accumulate line rows permanently — Zoho's export is rolling, so a
@@ -671,6 +672,8 @@ if page == "Upload Files":
         "AP":   ["ap", "payable", "payables", "apageing", "apaging"],
         "AR":   ["ar", "receivable", "receivables", "arageing", "araging"],
         "Inv":  ["inv", "invoice", "invoices"],
+        "AcctTxn": ["accounttransactions", "accounttransaction",
+                    "accttransactions", "accttxn", "accounttxn"],
     }
 
     def _norm(s) -> str:
@@ -729,6 +732,7 @@ if page == "Upload Files":
             ("DN",   {"vendor credit status", "vendor credit number"}),
             ("AP",   {"age", "vendor_name", "balance"}),
             ("AR",   {"age", "customer_name", "balance"}),
+            ("AcctTxn", {"entity_number", "account_name"}),
         ]
         for target, sig in signatures:
             if sig.issubset(cols):
@@ -844,9 +848,11 @@ if page == "Upload Files":
                     results.append({"File": filename, "Sheet": "YTD Sales", "Dataset": "AmazonYTD",
                                     "Rows": len(ytd), "Status": "✅"})
                     return
-            # Only these are ever ingested — any other sheet (P&L, Account
-            # Transactions, dropdowns, …) is ignored even if present in the file.
-            ALLOWED_INGEST = {"Bill", "CN", "DN", "AP", "AR", "Inv", "BillHistory"}
+            # Only these are ever ingested — any other sheet (P&L, dropdowns, …)
+            # is ignored even if present in the file. Account Transactions IS now
+            # ingested: it supplies the authoritative per-transaction vertical
+            # (account_name) used for receivables attribution.
+            ALLOWED_INGEST = {"Bill", "CN", "DN", "AP", "AR", "Inv", "BillHistory", "AcctTxn"}
             for sheet in xl.sheet_names:
                 df = pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet)
                 df = _fix_title_header(file_bytes, sheet, df)
@@ -870,7 +876,7 @@ if page == "Upload Files":
     st.markdown(
         "Upload the Zoho exports as **individual Excel files** (multiple allowed) or a single **ZIP** "
         "containing them. Each file/sheet is auto-detected and routed to the right dataset — "
-        "**Bill, Invoice, CN, DN, AP, AR** — by its columns, sheet name, or filename."
+        "**Bill, Invoice, CN, DN, AP, AR, Account Transactions** — by its columns, sheet name, or filename."
     )
 
     # ── Permanent older-bills store status ────────────────────────────────────
@@ -1316,7 +1322,8 @@ elif page == "Merge & Compute":
                 logistics_df=bill_log_df if not bill_log_df.empty else None,
                 no_dn_shipments=db.load_no_dn_shipments()
                 | cleaning.void_dn_shipments(
-                    db.read_table("DN", "raw").drop(columns=["_source_file"], errors="ignore"))
+                    db.read_table("DN", "raw").drop(columns=["_source_file"], errors="ignore")),
+                provision_rates=db.load_provision_rates() or None
             )
             # Write to DB (auto-deduplicates col names for SQLite)
             db.write_table(profit_df, "Merged", "profitability")
@@ -1459,6 +1466,44 @@ elif page == "Summary Report":
             "(invoice) side. `Net Margin = Gross Margin − Transportation Charges − Operational Cost`."
         )
 
+        # ── CN/DN provision rates — the FIRST input, before the Reco review ─────
+        # Editable per-vertical; only verticals that carry a provision are shown.
+        # Changing a rate re-runs the whole profitability compute (provision is
+        # baked in at build time), so it invalidates the cached report on save.
+        def _render_provision_editor():
+            st.markdown("### 🧮 CN/DN Provision Rates")
+            st.caption("Set the Credit/Debit-Note provision **%** per vertical. It is applied "
+                       "to Sale Amount (Provision for CN) and Purchase Price (Provision for DN) "
+                       "when profitability is computed. Blank-shipment, no-DN-listed and "
+                       "actual-CN shipments never take a provision regardless of the rate. "
+                       "Change it anytime — saving recomputes everything below.")
+            _saved = db.load_provision_rates()
+            _rows = [{"Vertical": v,
+                      "Provision %": round(_saved.get(v, compute.DEFAULT_PROVISION_RATES[v]) * 100, 4)}
+                     for v in compute.EDITABLE_PROVISION_VERTICALS]
+            _pe = st.data_editor(
+                pd.DataFrame(_rows), hide_index=True, use_container_width=True,
+                key="prov_editor", disabled=["Vertical"],
+                column_config={"Provision %": st.column_config.NumberColumn(
+                    "Provision %", min_value=0.0, max_value=100.0, step=0.01,
+                    format="%.4f")})
+            if st.button("💾 Save provision % & recompute", key="prov_save"):
+                _new = {str(r["Vertical"]): float(r["Provision %"]) / 100.0
+                        for _, r in _pe.iterrows()}
+                db.save_provision_rates(_new)
+                db.session_drop("Merged", "profitability")   # force rebuild w/ new rates
+                if db.LAST_SYNC_OK is False:
+                    st.warning(f"Saved locally, but GitHub sync failed: {db.LAST_SYNC_ERR}")
+                st.rerun()
+            _eff = {v: _saved.get(v, compute.DEFAULT_PROVISION_RATES[v])
+                    for v in compute.EDITABLE_PROVISION_VERTICALS}
+            st.caption("In effect: " + " · ".join(f"**{v}** {r*100:.4g}%"
+                                                   for v, r in _eff.items())
+                       + ("" if _saved else "  _(defaults — none saved yet)_"))
+
+        _render_provision_editor()
+        st.markdown("---")
+
         ar_df = db.read_table("AR", "raw").drop(columns=["_source_file"], errors="ignore")
         ap_df = db.read_table("AP", "raw").drop(columns=["_source_file"], errors="ignore")
         # Operational-cost bills: the CURRENT MIS's cleaned Bill table (holds this
@@ -1466,9 +1511,13 @@ elif page == "Summary Report":
         # the older-bills store as fallback. Drives the AFR Operational Cost row.
         _cur_bills = db.read_table("Bill", "cleaned").drop(columns=["_source_file"], errors="ignore")
         op_bills = _cur_bills if not _cur_bills.empty else db.load_older_bills()
+        # Account Transactions sheet → authoritative per-transaction vertical for
+        # receivables attribution (VLOOKUP transaction_number → account_name).
+        _acct_txn = db.read_table("AcctTxn", "raw").drop(columns=["_source_file"], errors="ignore")
         _ar = ar_df if not ar_df.empty else None
         _ap = ap_df if not ap_df.empty else None
         _obills = op_bills if not op_bills.empty else None
+        _atxn = _acct_txn if not _acct_txn.empty else None
 
         # ── Re-Commerce: FIXED signed-off detail up to the cutover (17-07-2026);
         # everything AFTER it is built LIVE from the Amazon × Recykal Google
@@ -1512,38 +1561,49 @@ elif page == "Summary Report":
         _cand = reports.reco_candidates(profit_df)
         _sig = tuple(sorted(_cand["Shipment ID"].tolist())) if len(_cand) else ()
 
+        # Line-item key (Shipment · Invoice · Material) — matches reports._reco_key
+        # so a ticked row excludes exactly that line, not the whole shipment.
+        def _rk(frame):
+            return list(zip(frame["Shipment ID"].astype(str),
+                            frame["Invoice No"].astype(str),
+                            frame["Material"].astype(str)))
+
         def _render_reco_review(suffix=""):
             st.markdown("### 🧾 Reco Items — manual review (all verticals)")
             if not len(_cand):
-                st.info("No missing-bill shipments detected in the current data — "
-                        "every shipment has a matched cost source. Nothing to review.")
+                st.info("No shipments are missing a bill or invoice side in the current "
+                        "data — every line item has both a purchase and a sale matched. "
+                        "Nothing to review.")
                 return
-            st.caption("Tick a shipment to **keep it in Reco Items** (excluded from the "
-                       "Details & summary). Unticked shipments are **included** in the "
-                       "calculations. Click **Save** to (re)compute the summary.")
+            st.caption("Each row is one **line item** (Shipment · Invoice · Material) whose "
+                       "**bill side or invoice side is missing** (see *Missing Side*). Tick a "
+                       "row to **keep it in Reco Items** — that exact line is excluded from the "
+                       "Details & summary. Unticked lines are **included**. Click **Save** to "
+                       "(re)compute the summary.")
             _verts = sorted(_cand["Vertical"].unique())
             _pick = st.multiselect("Filter by vertical", _verts, default=_verts,
                                    key=f"reco_vert_filter{suffix}")
             _prev = st.session_state.get("reco_selected", set())
             _ed = _cand[_cand["Vertical"].isin(_pick)].copy()
-            _ed["Reco? (exclude)"] = _ed["Shipment ID"].isin(_prev)
+            _ed["Reco? (exclude)"] = [k in _prev for k in _rk(_ed)]
             _res = st.data_editor(
                 _ed, hide_index=True, use_container_width=True, key=f"reco_editor{suffix}",
                 disabled=["Vertical", "Shipment ID", "Invoice No", "Date", "Buyer Name",
-                          "Material", "Amount", "Purchase Price", "Cost Source"])
+                          "Material", "Amount", "Purchase Price", "Missing Side"])
             if st.button("💾 Save & compute summary", key=f"reco_save{suffix}"):
-                # Keep prior ticks for shipments hidden by the vertical filter;
+                # Keep prior ticks for line items hidden by the vertical filter;
                 # update only the rows shown in the editor.
-                _shown = set(_res["Shipment ID"].astype(str))
-                _picked = set(_res.loc[_res["Reco? (exclude)"], "Shipment ID"].astype(str))
+                _keys = _rk(_res)
+                _shown = set(_keys)
+                _picked = {k for k, tick in zip(_keys, _res["Reco? (exclude)"]) if tick}
                 st.session_state["reco_selected"] = (_prev - _shown) | _picked
                 st.session_state["reco_sig"] = _sig
                 st.rerun()
 
         _reco_ready = (len(_cand) == 0) or (st.session_state.get("reco_sig") == _sig)
         if not _reco_ready:
-            st.warning(f"{len(_cand)} shipment(s) have a missing bill — review below, "
-                       "then **Save** to compute the summary.")
+            st.warning(f"{len(_cand)} line item(s) are missing a bill or invoice side — "
+                       "review below, then **Save** to compute the summary.")
             _render_reco_review()
             st.stop()
         reco_ships = st.session_state.get("reco_selected", set()) if len(_cand) else set()
@@ -1667,7 +1727,7 @@ elif page == "Summary Report":
 
         def _build(_pdf):
             _s = reports.summaries_by_category(_pdf, _ar, _ap, op_cost_bills=_obills,
-                                               reco_ships=reco_ships)
+                                               reco_ships=reco_ships, acct_txn_df=_atxn)
             try:
                 _s = _frozen.apply_frozen(_s, _app_dir, _open_m, skip_tabs=_reco_skip)
             except Exception as _fe:
@@ -1695,7 +1755,7 @@ elif page == "Summary Report":
             if "Re-Commerce" in summaries:
                 _s_ns = reports.summaries_by_category(
                     reports.rc_without_samsung(_sel_pdf), _ar, _ap,
-                    op_cost_bills=_obills, reco_ships=reco_ships)
+                    op_cost_bills=_obills, reco_ships=reco_ships, acct_txn_df=_atxn)
                 _rc_ns = _s_ns.get("Re-Commerce")
                 if _rc_ns is not None:
                     _frozen.apply_rc_nosamsung(_rc_ns, _open_m)
@@ -1739,7 +1799,8 @@ elif page == "Summary Report":
                     try:
                         _wb_v = reports.combined_workbook(
                             summaries, _sel_pdf, _ar, _ap, vertical=name, reco_ships=reco_ships,
-                            rc_ns_summary=_rc_ns if name == "Re-Commerce" else None, op_cost_bills=_obills)
+                            rc_ns_summary=_rc_ns if name == "Re-Commerce" else None,
+                            op_cost_bills=_obills, acct_txn_df=_atxn)
                         st.download_button(
                             f"⬇ Download {name} (Excel — Summary · Receivables · Payables · Report)",
                             _wb_v, file_name=f"profitability_{safe}.xlsx",
@@ -1770,7 +1831,8 @@ elif page == "Summary Report":
             try:
                 _s = summaries if _lbl == _sel else _build(_pdf)
                 _wb_all = reports.combined_workbook(_s, _pdf, _ar, _ap, reco_ships=reco_ships,
-                                                    rc_ns_summary=_rc_ns, op_cost_bills=_obills)
+                                                    rc_ns_summary=_rc_ns, op_cost_bills=_obills,
+                                                    acct_txn_df=_atxn)
                 st.download_button(
                     f"⬇ Download ALL Verticals{_sfx} (Excel — Summary · Receivables · Payables · Report)",
                     _wb_all, file_name=_fn,
@@ -1837,7 +1899,8 @@ elif page == "Summary Report":
                         if _v == "All Categories":
                             continue
                         _wb = reports.combined_workbook(_s, _pdf, _ar, _ap, vertical=_v, reco_ships=reco_ships,
-                                                        rc_ns_summary=_rc_ns if _v == "Re-Commerce" else None, op_cost_bills=_obills)
+                                                        rc_ns_summary=_rc_ns if _v == "Re-Commerce" else None,
+                                                        op_cost_bills=_obills, acct_txn_df=_atxn)
                         _rcpts = only_to or _rbv.get(_v, _base_to)
                         _safe = _v.replace("(", "_").replace(")", "").replace("/", "-").replace(" ", "_")
                         _vbody = _body.replace("Profitability Report", f"Profitability Report - {_v}")
@@ -1848,7 +1911,8 @@ elif page == "Summary Report":
                         results.append(f"{'✅' if _ok else '❌'} {_v}{_vsfx}: {_msg}")
                 else:
                     _wb = reports.combined_workbook(_s, _pdf, _ar, _ap, reco_ships=reco_ships,
-                                                    rc_ns_summary=_rc_ns, op_cost_bills=_obills)
+                                                    rc_ns_summary=_rc_ns, op_cost_bills=_obills,
+                                                    acct_txn_df=_atxn)
                     _ok, _msg = _mailer.send_report(
                         only_to or _base_to, f"{_subj}{_vsfx}", _body, _wb,
                         f"profitability_all{_fsfx}.xlsx", _cfg,

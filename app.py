@@ -224,7 +224,7 @@ with st.container(key="rkheader"):
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
         with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.3.4"):
-            st.caption("build: **v3.7.0 — DN provision base is now (Purchase Price + Transportation Charges) × rate, not Purchase Price alone (all verticals with a provision). Invoice-line matching keyed by shipment+material+INVOICE NO, so same-shipment/same-material lines on different invoices (e.g. End Generator resell, SH072616016) stay separate instead of being summed. M4 quantity now counts UNITS (like IT AD/Re-Commerce), not MT — fixes M4 FY-total quantity (was collapsing to ~0 via Kg÷1000 vs the frozen unit count). Receivables vertical from the Account Transactions sheet (VLOOKUP transaction_number→entity_number→account_name), prefix logic only as fallback for txns absent there. 8th sheet ingested. IB warehouse/B2B split unchanged. AFR 2.5% provision; editable per-vertical provision %; Reco per-line exclusion.**")
+            st.caption("build: **v3.9.0 — Manual line items: add a Details row to ANY vertical (display-unit quantity), stored per-vertical until edited, flowing into Details + summary (no auto-provision). Reco review: blank-shipment same-material charge lines collapse into ONE line item (bill + invoice legs merged); ticking it excludes both. DN provision base is now (Purchase Price + Transportation Charges) × rate, not Purchase Price alone (all verticals with a provision). Invoice-line matching keyed by shipment+material+INVOICE NO, so same-shipment/same-material lines on different invoices (e.g. End Generator resell, SH072616016) stay separate instead of being summed. M4 quantity now counts UNITS (like IT AD/Re-Commerce), not MT — fixes M4 FY-total quantity (was collapsing to ~0 via Kg÷1000 vs the frozen unit count). Receivables vertical from the Account Transactions sheet (VLOOKUP transaction_number→entity_number→account_name), prefix logic only as fallback for txns absent there. 8th sheet ingested. IB warehouse/B2B split unchanged. AFR 2.5% provision; editable per-vertical provision %; Reco per-line exclusion.**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())
@@ -1667,6 +1667,38 @@ elif page == "Summary Report":
                 st.rerun()
         if not _cd_store.empty:
             profit_df = reports.inject_custom_duty(profit_df, _cd_store)
+
+        # ── Manual line items — ANY vertical (added to Details + calculation) ─
+        _ml_store = db.load_manual_lines()
+        _ml_verticals = ["End Generator", "Plastic", "Re-Commerce", "ReWerse",
+                         "AFR", "M4", "IT AD", "Enterprise", "Processing Center"]
+        with st.expander(f"➕ Manual line items — any vertical ({len(_ml_store)} stored)"):
+            st.caption("Add a Details line item to **any vertical** — it lands in that "
+                       "vertical's Details **and** flows into the summary (Gross/Net Margin "
+                       "derived from what you enter; no CN/DN provision applied). "
+                       "**Quantity is in the vertical's display unit** — MT for weight "
+                       "verticals, units for IT AD / Re-Commerce / M4. Enterprise vs "
+                       "Processing Center is decided by the Shipment ID (SH… → Enterprise). "
+                       "Rows **stay stored** until edited. Month format: `Jul-26`.")
+            st.caption(_durability_note)
+            _ml_seed = _ml_store if not _ml_store.empty else pd.DataFrame(
+                {c: pd.Series(dtype=("float" if c in ("Quantity", "Sales Amount",
+                                                      "Purchase Price", "Transportation")
+                                     else "str"))
+                 for c in db.MANUAL_LINES_COLS})
+            _ml_res = st.data_editor(
+                _ml_seed, num_rows="dynamic", use_container_width=True, key="ml_editor",
+                column_config={"Vertical": st.column_config.SelectboxColumn(
+                    "Vertical", options=_ml_verticals, required=True)})
+            _m2 = st.session_state.pop("ml_save_msg", None)
+            if _m2:
+                (st.warning if "⚠" in _m2 else st.success)(_m2)
+            if st.button("💾 Save manual line items", key="ml_save"):
+                _n = db.save_manual_lines(_ml_res)
+                st.session_state["ml_save_msg"] = _save_feedback(_n, "manual line item(s)")
+                st.rerun()
+        if not _ml_store.empty:
+            profit_df = reports.inject_manual_line_items(profit_df, _ml_store)
 
         _ent_oc = db.load_enterprise_opcost()
         with st.expander(f"⚙️ Enterprise — Operational Cost overrides ({len(_ent_oc)} month(s) stored)"):

@@ -471,6 +471,59 @@ def load_provision_rates() -> dict:
             zip(d.iloc[:, 0], pd.to_numeric(d.iloc[:, 1], errors="coerce").fillna(0))}
 
 
+# ── Manual line items (any vertical) ──────────────────────────────────────────
+# User-entered Details line items, added to ANY vertical and kept until edited.
+# Injected into the profitability so they show in Details AND flow into the
+# summary. Persisted (GitHub write-through) so they survive hosted restarts.
+MANUAL_LINES_PATH = PERSIST_DIR / "manual_line_items.parquet"
+MANUAL_LINES_COLS = ["Vertical", "Month (mmm-yy)", "Shipment ID", "Material",
+                     "Buyer Name", "Quantity", "Sales Amount", "Purchase Price",
+                     "Transportation"]
+
+
+def save_manual_lines(df: pd.DataFrame) -> int:
+    """Full snapshot — replaces. Columns = MANUAL_LINES_COLS. A row is kept only
+    with a Vertical AND a parseable Month AND at least one non-zero numeric
+    (Quantity/Sales/Purchase/Transport). Rows that have data but fail validation
+    are reported via LAST_SAVE_DROPPED (never dropped silently); fully-blank
+    editor rows are ignored."""
+    global LAST_SAVE_DROPPED
+    LAST_SAVE_DROPPED = []
+    if df is None:
+        return manual_lines_count()
+    d = df.copy()
+    d.columns = [str(c) for c in d.columns]
+    d = d.reindex(columns=MANUAL_LINES_COLS)
+    vert = d["Vertical"].astype(str).str.strip()
+    mdt  = _parse_month_series(d["Month (mmm-yy)"])
+    nums = {c: pd.to_numeric(d[c], errors="coerce") for c in
+            ("Quantity", "Sales Amount", "Purchase Price", "Transportation")}
+    any_num = pd.concat(nums.values(), axis=1).fillna(0).abs().sum(axis=1) > 0
+    has_vert = vert.ne("") & vert.str.lower().ne("nan")
+    blank = (~has_vert) & mdt.isna() & ~any_num          # empty editor row
+    ok = has_vert & mdt.notna() & any_num
+    LAST_SAVE_DROPPED = [f"vertical '{d['Vertical'].iloc[i]}' / month '{d['Month (mmm-yy)'].iloc[i]}'"
+                         for i in d.index[~ok & ~blank]]
+    d = d[ok].reset_index(drop=True)
+    if len(d):
+        d["Month (mmm-yy)"] = mdt[ok].dt.strftime("%b-%y").values   # canonical
+        for c in ("Quantity", "Sales Amount", "Purchase Price", "Transportation"):
+            d[c] = pd.to_numeric(d[c], errors="coerce").fillna(0.0)
+    return _save_small(d, MANUAL_LINES_PATH,
+                       sync_msg="Update manual Details line items (app entry)")
+
+
+def load_manual_lines() -> pd.DataFrame:
+    d = _load_small(MANUAL_LINES_PATH)
+    if d.empty:
+        return pd.DataFrame(columns=MANUAL_LINES_COLS)
+    return d.reindex(columns=MANUAL_LINES_COLS)
+
+
+def manual_lines_count() -> int:
+    return len(load_manual_lines())
+
+
 # ── Accumulated profitability-details store (permanent) ──────────────────────
 # Zoho's MIS export is ROLLING — each one only carries recent invoices, so a
 # month's line rows vanish from later exports. This store accumulates every

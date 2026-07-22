@@ -119,6 +119,10 @@ def _ib_warehouse_set() -> set:
 CUSTOM_DUTY_COST_SOURCE = "Custom Duty (manual entry)"
 OPCOST_COST_SOURCE = "Operational Cost (manual entry)"
 AFR_OPCOST_COST_SOURCE = "AFR Operational Cost (service charge)"
+MANUAL_LINE_COST_SOURCE = "Manual Line Item (user entry)"
+# Verticals that count UNITS (quantity entered/shown as-is); the rest are MT, so a
+# manual line's display quantity is ×1000 to store Kg. Mirrors reports._UNIT_TABS.
+_UNIT_VERTICALS = {"itad", "recommerce", "m4"}
 # AFR tradable materials — always PURCHASE cost, never operational cost.
 # NB: no bare "char" — it substring-matches "Transport CHARges" (a service).
 _AFR_MATERIAL_KW = ("chilli", "chilly", "husk", "pyrolysis", "briquette")
@@ -280,6 +284,78 @@ def inject_custom_duty(profit_df: pd.DataFrame, cd: pd.DataFrame) -> pd.DataFram
         return profit_df
     return pd.concat([profit_df, pd.DataFrame(rows, columns=profit_df.columns)],
                      ignore_index=True)
+
+
+def _manual_line_mask(df: pd.DataFrame) -> pd.Series:
+    """Rows that are user-entered manual line items (by their Cost Source marker)."""
+    cs_col = next((c for c in df.columns
+                   if "".join(ch for ch in str(c).lower() if ch.isalnum()) == "costsource"), None)
+    if cs_col is None:
+        return pd.Series(False, index=df.index)
+    return df[cs_col].astype(str).str.strip().eq(MANUAL_LINE_COST_SOURCE)
+
+
+def inject_manual_line_items(profit_df: pd.DataFrame, ml: pd.DataFrame) -> pd.DataFrame:
+    """Append user-entered manual line items as profitability rows so they show in
+    the Details sheet AND flow into the summary (Sales/Purchase/Qty/Transport →
+    Gross & Net Margin). No CN/DN provision is applied — the entered numbers are
+    taken as final. Quantity is entered in the vertical's DISPLAY unit (MT for
+    weight verticals, units for IT AD / Re-Commerce / M4) and stored as Kg.
+    `ml` columns: 0 Vertical, 1 Month(mmm-yy), 2 Shipment ID, 3 Material,
+    4 Buyer Name, 5 Quantity, 6 Sales Amount, 7 Purchase Price, 8 Transportation."""
+    if ml is None or getattr(ml, "empty", True) or profit_df is None or profit_df.empty:
+        return profit_df
+    cols = list(profit_df.columns)
+    ncol = len(cols)
+    if ncol < 86:
+        return profit_df
+
+    def _named(name):
+        key = "".join(ch for ch in name.lower() if ch.isalnum())
+        return next((c for c in profit_df.columns
+                     if "".join(ch for ch in str(c).lower() if ch.isalnum()) == key), None)
+    _cs, _rn = _named("Cost Source"), _named("Resale Note")
+
+    def _num(v):
+        return float(pd.to_numeric(pd.Series([v]), errors="coerce").fillna(0).iloc[0])
+
+    rows = []
+    for i in range(len(ml)):
+        vert = str(ml.iloc[i, 0]).strip()
+        mdt = pd.to_datetime(str(ml.iloc[i, 1]).strip(), format="%b-%y", errors="coerce")
+        if not vert or vert.lower() == "nan" or pd.isna(mdt):
+            continue
+        vkey = "".join(c for c in vert.lower() if c.isalnum())
+        qty_disp = _num(ml.iloc[i, 5]); sales = _num(ml.iloc[i, 6])
+        pur = _num(ml.iloc[i, 7]); tr = _num(ml.iloc[i, 8])
+        qty_kg = qty_disp * (1 if vkey in _UNIT_VERTICALS else 1000)
+        # Enterprise / Processing Center live under 'Institutional Business' and
+        # split by the Shipment ID (SH… → Enterprise, else Processing Center).
+        bcat = ("Institutional Business"
+                if vkey in ("enterprise", "processingcenter", "institutionalbusiness", "ib")
+                else vert)
+        r = {c: None for c in cols}
+        r[cols[1]] = mdt.strftime("%B")                       # Month (full name)
+        r[cols[2]] = mdt.strftime("%Y-%m-%d")                 # Date (1st of month)
+        if ncol > 80: r[cols[80]] = mdt.strftime("%b-%y")     # Month (mmm-yy)
+        r[cols[3]] = str(ml.iloc[i, 2]).strip()               # Shipment ID
+        if ncol > 41: r[cols[41]] = str(ml.iloc[i, 4]).strip()  # Buyer Name
+        r[cols[12]] = str(ml.iloc[i, 3]).strip() or "Manual Line Item"   # Material
+        r[cols[15]] = pur                                      # Purchase Price
+        if ncol > 46: r[cols[46]] = qty_kg                    # Qty(Kg) sales
+        if ncol > 51: r[cols[51]] = qty_kg                    # Net Qty sales
+        if ncol > 48: r[cols[48]] = sales                     # Amount (sales)
+        if ncol > 26: r[cols[26]] = tr                        # Total Logistics (transport)
+        if ncol > 64: r[cols[64]] = sales                     # Net Revenue (display)
+        if ncol > 37: r[cols[37]] = pur + tr                  # Total Cost (display)
+        if ncol > 65: r[cols[65]] = sales - (pur + tr)        # Margin (display)
+        r[cols[85]] = bcat                                    # Broad Category → vertical
+        if _cs is not None: r[_cs] = MANUAL_LINE_COST_SOURCE
+        if _rn is not None: r[_rn] = "Manual line item (user-entered) — kept until edited"
+        rows.append(r)
+    if not rows:
+        return profit_df
+    return pd.concat([profit_df, pd.DataFrame(rows, columns=cols)], ignore_index=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -803,10 +879,16 @@ def reco_candidates(profit_df: pd.DataFrame) -> pd.DataFrame:
     _csc = _reco_cs_col(profit_df)
     _uniq_join = lambda x: ", ".join(sorted({str(v).strip() for v in x
                                              if str(v).strip() not in ("", "nan", "None")}))
+    _ship_s = sub.iloc[:, 3].astype(str).str.strip()
+    _inv_s  = sub.iloc[:, 39].astype(str).str.strip()
     g = pd.DataFrame({
         "Vertical": sub.iloc[:, 85].astype(str).str.strip().map(_canon_label),
-        "Shipment ID": sub.iloc[:, 3].astype(str).str.strip(),
-        "Invoice No": sub.iloc[:, 39].astype(str).str.strip(),
+        "Shipment ID": _ship_s,
+        # Blank-shipment charge lines (e.g. Hydra) carry no shipment id to link a
+        # purchase to its sale, so the same material shows up as two rows (orphan
+        # bill + orphan invoice). Collapse them by material ONLY (invoice grain
+        # blanked) so they read as ONE reco line item instead of double-counting.
+        "Invoice No": _reco_inv_component(_ship_s, _inv_s),
         "Date": pd.to_datetime(sub.iloc[:, 2], errors="coerce").dt.strftime("%Y-%m-%d").fillna(""),
         "Buyer Name": sub.iloc[:, 41].astype(str),
         "Material": sub.iloc[:, 12].astype(str).str.strip(),
@@ -816,24 +898,43 @@ def reco_candidates(profit_df: pd.DataFrame) -> pd.DataFrame:
         "Missing Side": (_reco_missing_side(sub[_csc]) if _csc
                          else pd.Series("Bill (purchase) missing", index=sub.index)),
     })
-    # One row per (Shipment ID · Invoice No · Material) so each missing line is
-    # explicit — no lumping a shipment's materials across its different invoices.
-    # This is also the EXCLUSION grain (see _reco_exclusion_mask): a ticked row
-    # excludes exactly that line item, not the whole shipment.
+    # One row per (Shipment ID · Invoice No · Material) — the EXCLUSION grain (see
+    # _reco_exclusion_mask): a ticked row excludes exactly that line item. For
+    # blank-shipment rows Invoice No is blanked above, so a material's bill+invoice
+    # legs merge into a single line item.
     out = (g.groupby(["Shipment ID", "Invoice No", "Material"], as_index=False)
              .agg({"Vertical": "first", "Date": "first", "Buyer Name": "first",
                    "Amount": "sum", "Purchase Price": "sum",
                    "Missing Side": lambda x: _uniq_join(x) or "Bill (purchase) missing"}))[cols]
+    # A merged blank-shipment line that now carries BOTH a sale and a purchase is
+    # no longer "missing" a side — label it so the reviewer isn't misled.
+    _both = (out["Shipment ID"].str.strip() == "") & (out["Amount"] != 0) & (out["Purchase Price"] != 0)
+    out.loc[_both, "Missing Side"] = "Bill + Invoice matched by material (blank shipment)"
     return out.sort_values(["Vertical", "Shipment ID", "Invoice No", "Material"],
                            ignore_index=True)
 
 
+_RECO_BLANK_SHIP = {"", "nan", "none", "nat", "<na>"}
+
+
+def _reco_inv_component(ship: pd.Series, invno: pd.Series) -> pd.Series:
+    """Invoice grain for the reco line-item key: the invoice number normally, but
+    BLANK for blank-shipment rows — so same-material blank-shipment charge lines
+    (a Hydra purchase + its sale) collapse into ONE reco line item instead of
+    being double-listed. Used by BOTH reco_candidates (display) and _reco_key
+    (exclusion) so a ticked merged row excludes every underlying leg."""
+    blank = ship.astype(str).str.strip().str.lower().isin(_RECO_BLANK_SHIP)
+    return invno.astype(str).str.strip().mask(blank, "")
+
+
 def _reco_key(df: pd.DataFrame) -> list[tuple]:
     """The (Shipment ID · Invoice No · Material) line-item key for each row —
-    the exclusion grain, matching exactly how reco_candidates groups/displays.
+    the exclusion grain, matching exactly how reco_candidates groups/displays
+    (blank-shipment rows share a blank invoice component so they merge by material).
     Positional & identically transformed: 3=Shipment ID, 39=Invoice No, 12=Material."""
-    return list(zip(df.iloc[:, 3].astype(str).str.strip(),
-                    df.iloc[:, 39].astype(str).str.strip(),
+    ship = df.iloc[:, 3].astype(str).str.strip()
+    return list(zip(ship,
+                    _reco_inv_component(ship, df.iloc[:, 39]),
                     df.iloc[:, 12].astype(str).str.strip()))
 
 
@@ -1979,6 +2080,15 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
             _cds = None
         if _cds is not None and len(_cds) and not _custom_duty_mask(_live_src).any():
             _live_src = inject_custom_duty(_live_src, _cds)
+        # Manual line items (any vertical) — same reasoning as Custom Duty: inject
+        # here too (guarded) so the Details sheet carries them when built from the
+        # accumulated store rather than the Summary page's already-injected frame.
+        try:
+            _mls = _dbm.load_manual_lines() if _dbm is not None else None
+        except Exception:
+            _mls = None
+        if _mls is not None and len(_mls) and not _manual_line_mask(_live_src).any():
+            _live_src = inject_manual_line_items(_live_src, _mls)
         # Enterprise Operational Cost overrides -> 'Service Charges (Mon-YY)'
         # line items (display/audit; the summary row uses the same override).
         try:

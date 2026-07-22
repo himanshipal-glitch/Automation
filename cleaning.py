@@ -379,17 +379,25 @@ def merge_invoice_bill(inv_df: pd.DataFrame, bill_df: pd.DataFrame,
     cost_source: list[str] = [""] * len(inv)   # per-row provenance of the cost
     op_cost_col: list[float] = [0.0] * len(inv)  # operational cost (service orphans)
 
-    # Group invoice lines by (raw shipment string, item).
+    # Group invoice lines by (raw shipment string, item, INVOICE NUMBER).
     # A multi-source invoice carries a comma list of shipment IDs
     # ("MP/X, MP/Y, MP/Z") — split it and pull candidate bill lines from
     # ALL listed shipments. Single-shipment groups are processed FIRST so
     # they claim their own bills before multi-shipment groups take leftovers.
+    # The invoice number is part of the key so that two line items sharing the
+    # SAME shipment + material but sitting on DIFFERENT invoices (e.g. an End
+    # Generator resell: original sale + resale) stay SEPARATE lines instead of
+    # being pooled/added up. Lines on the SAME invoice (same shipment+item)
+    # still group together, so the common single-invoice case is unchanged.
     ship_key = inv["CFSO_Number"].astype(str).str.strip()
     item_key = inv["Item_Name"].astype(str).str.strip()
-    groups = sorted(inv.groupby([ship_key, item_key]).groups.items(),
+    _invno_key_col = _col(inv, "Invoice_Number", "Invoice Number")
+    invno_key = (inv[_invno_key_col].astype(str).str.strip()
+                 if _invno_key_col else pd.Series("", index=inv.index))
+    groups = sorted(inv.groupby([ship_key, item_key, invno_key]).groups.items(),
                     key=lambda kv: kv[0][0].count(","))
 
-    for (ship_str, item), inv_pos_idx in groups:
+    for (ship_str, item, _invno), inv_pos_idx in groups:
         ships = [s.strip() for s in ship_str.split(",") if s.strip()]
         cand = [i for s in ships for i in bill_index.get((s, item), [])
                 if i not in bill_used]

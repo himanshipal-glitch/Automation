@@ -224,7 +224,7 @@ with st.container(key="rkheader"):
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
         with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.3.4"):
-            st.caption("build: **v3.6.1 — M4 quantity now counts UNITS (like IT AD/Re-Commerce), not MT — fixes M4 FY-total quantity (was collapsing to ~0 via Kg÷1000 vs the frozen unit count). Receivables vertical from the Account Transactions sheet (VLOOKUP transaction_number→entity_number→account_name), prefix logic only as fallback for txns absent there. 8th sheet ingested. IB warehouse/B2B split unchanged. AFR 2.5% provision; editable per-vertical provision %; Reco per-line exclusion.**")
+            st.caption("build: **v3.7.0 — DN provision base is now (Purchase Price + Transportation Charges) × rate, not Purchase Price alone (all verticals with a provision). Invoice-line matching keyed by shipment+material+INVOICE NO, so same-shipment/same-material lines on different invoices (e.g. End Generator resell, SH072616016) stay separate instead of being summed. M4 quantity now counts UNITS (like IT AD/Re-Commerce), not MT — fixes M4 FY-total quantity (was collapsing to ~0 via Kg÷1000 vs the frozen unit count). Receivables vertical from the Account Transactions sheet (VLOOKUP transaction_number→entity_number→account_name), prefix logic only as fallback for txns absent there. 8th sheet ingested. IB warehouse/B2B split unchanged. AFR 2.5% provision; editable per-vertical provision %; Reco per-line exclusion.**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())

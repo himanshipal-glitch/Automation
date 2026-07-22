@@ -311,8 +311,8 @@ def build_profitability(merged_df: pd.DataFrame,
     # ── ReWerse provision rule ────────────────────────────────────────────────
     # Provision applies to ReWerse shipments that are NOT in the 'cf.dn = no'
     # exclusion file (those shipments don't get a provision). For the rest:
-    #   Provision for CN = 2.5% of Sale Amount      (buyer side)  → reduces revenue
-    #   Provision for DN = 2.5% of Purchase Price   (seller side)
+    #   Provision for CN = 2.5% of Sale Amount                      (buyer side)  → reduces revenue
+    #   Provision for DN = 2.5% of (Purchase Price + Transport AB)  (seller side)
     # '_no_dn_excluded' is 1 for shipments listed in the exclusion file.
     #   ...AND only if the SHIPMENT has NO actual Credit Note on ANY of its rows.
     #      If any row of a shipment has a CN, the WHOLE shipment is excluded
@@ -336,7 +336,10 @@ def build_profitability(merged_df: pd.DataFrame,
     # with no 4.55% deduction). Ordinary material sales all carry a Shipment ID.
     _prov_trig  = (_rate > 0) & (_excluded == 0) & (_ship_has_cn <= 0) & (_ship_key != "")
     BM  = pd.Series(np.where(_prov_trig, _rate * AX, 0.0), index=d.index)  # Provision for CN
-    AL  = pd.Series(np.where(_prov_trig, _rate * Q,  0.0), index=d.index)  # Provision for DN
+    # Provision for DN is charged on the PURCHASE side. Base = Purchase Price PLUS
+    # Transportation Charges (AB = Total Logistics Cost): provision = (Q + AB) × rate.
+    # (Previously it was Q × rate only.) Applies to every vertical carrying a rate.
+    AL  = pd.Series(np.where(_prov_trig, _rate * (Q + AB), 0.0), index=d.index)  # Provision for DN
 
     # ── Full credit-note reversal ──────────────────────────────────────────────
     # When a shipment's total Actual CN is >= 95% of its total Sale, the deal is

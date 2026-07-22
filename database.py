@@ -476,48 +476,67 @@ def load_provision_rates() -> dict:
 # Injected into the profitability so they show in Details AND flow into the
 # summary. Persisted (GitHub write-through) so they survive hosted restarts.
 MANUAL_LINES_PATH = PERSIST_DIR / "manual_line_items.parquet"
-MANUAL_LINES_COLS = ["Vertical", "Month (mmm-yy)", "Shipment ID", "Material",
-                     "Buyer Name", "Quantity", "Sales Amount", "Purchase Price",
-                     "Transportation"]
+
+
+def _parse_date_flex(s) -> pd.Series:
+    """Format-aware date parse: ISO (YYYY-MM-DD) is parsed as-is; everything else
+    is treated day-first (Indian DD-MM-YYYY / DD/MM/YYYY). Avoids dayfirst=True
+    silently swapping month/day on ISO strings (would misbucket the row's month)."""
+    s = pd.Series(s).astype(str).str.strip()
+    iso = s.str.match(r"^\d{4}-\d{1,2}-\d{1,2}")
+    out = pd.to_datetime(s.where(iso), errors="coerce")
+    rest = pd.to_datetime(s.where(~iso), errors="coerce", dayfirst=True)
+    return out.fillna(rest)
+
+
+def _manual_lines_cols() -> list:
+    """Canonical column order — the raw-input fields defined in reports."""
+    try:
+        import reports
+        return list(reports.MANUAL_LINES_COLS)
+    except Exception:
+        return ["Vertical", "Qty Unit", "Date"]
 
 
 def save_manual_lines(df: pd.DataFrame) -> int:
-    """Full snapshot — replaces. Columns = MANUAL_LINES_COLS. A row is kept only
-    with a Vertical AND a parseable Month AND at least one non-zero numeric
-    (Quantity/Sales/Purchase/Transport). Rows that have data but fail validation
-    are reported via LAST_SAVE_DROPPED (never dropped silently); fully-blank
-    editor rows are ignored."""
+    """Full snapshot — replaces. A row is kept only with a Vertical AND a parseable
+    Date AND at least one non-zero numeric field. Rows with data that fail
+    validation are reported via LAST_SAVE_DROPPED (never dropped silently);
+    fully-blank editor rows are ignored. All input columns are preserved."""
     global LAST_SAVE_DROPPED
     LAST_SAVE_DROPPED = []
     if df is None:
         return manual_lines_count()
     d = df.copy()
     d.columns = [str(c) for c in d.columns]
-    d = d.reindex(columns=MANUAL_LINES_COLS)
-    vert = d["Vertical"].astype(str).str.strip()
-    mdt  = _parse_month_series(d["Month (mmm-yy)"])
-    nums = {c: pd.to_numeric(d[c], errors="coerce") for c in
-            ("Quantity", "Sales Amount", "Purchase Price", "Transportation")}
-    any_num = pd.concat(nums.values(), axis=1).fillna(0).abs().sum(axis=1) > 0
+    vert = (d["Vertical"].astype(str).str.strip()
+            if "Vertical" in d.columns else pd.Series([""] * len(d)))
+    ddt = (_parse_date_flex(d["Date"])
+           if "Date" in d.columns else pd.Series([pd.NaT] * len(d)))
+    _numcols = [c for c in d.columns
+                if pd.to_numeric(d[c], errors="coerce").notna().any()]
+    any_num = (pd.concat([pd.to_numeric(d[c], errors="coerce") for c in _numcols], axis=1)
+               .fillna(0).abs().sum(axis=1) > 0) if _numcols else pd.Series([False] * len(d))
     has_vert = vert.ne("") & vert.str.lower().ne("nan")
-    blank = (~has_vert) & mdt.isna() & ~any_num          # empty editor row
-    ok = has_vert & mdt.notna() & any_num
-    LAST_SAVE_DROPPED = [f"vertical '{d['Vertical'].iloc[i]}' / month '{d['Month (mmm-yy)'].iloc[i]}'"
+    blank = (~has_vert) & ddt.isna() & ~any_num          # empty editor row
+    ok = has_vert & ddt.notna() & any_num
+    LAST_SAVE_DROPPED = [f"vertical '{vert.iloc[i]}' / date '{d['Date'].iloc[i] if 'Date' in d.columns else ''}'"
                          for i in d.index[~ok & ~blank]]
     d = d[ok].reset_index(drop=True)
     if len(d):
-        d["Month (mmm-yy)"] = mdt[ok].dt.strftime("%b-%y").values   # canonical
-        for c in ("Quantity", "Sales Amount", "Purchase Price", "Transportation"):
-            d[c] = pd.to_numeric(d[c], errors="coerce").fillna(0.0)
+        d["Date"] = ddt[ok].dt.strftime("%Y-%m-%d").values       # canonical
     return _save_small(d, MANUAL_LINES_PATH,
                        sync_msg="Update manual Details line items (app entry)")
 
 
 def load_manual_lines() -> pd.DataFrame:
     d = _load_small(MANUAL_LINES_PATH)
+    cols = _manual_lines_cols()
     if d.empty:
-        return pd.DataFrame(columns=MANUAL_LINES_COLS)
-    return d.reindex(columns=MANUAL_LINES_COLS)
+        return pd.DataFrame(columns=cols)
+    # keep stored columns, ordered by the canonical list (extras appended)
+    ordered = [c for c in cols if c in d.columns] + [c for c in d.columns if c not in cols]
+    return d.reindex(columns=ordered)
 
 
 def manual_lines_count() -> int:

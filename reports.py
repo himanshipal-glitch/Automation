@@ -123,6 +123,53 @@ MANUAL_LINE_COST_SOURCE = "Manual Line Item (user entry)"
 # Verticals that count UNITS (quantity entered/shown as-is); the rest are MT, so a
 # manual line's display quantity is ×1000 to store Kg. Mirrors reports._UNIT_TABS.
 _UNIT_VERTICALS = {"itad", "recommerce", "m4"}
+
+# ── Manual line-item RAW-INPUT fields ─────────────────────────────────────────
+# The non-derived columns a user fills for a manual Details row, each mapped to
+# its position in the 107-col engine layout. Everything NOT listed here is DERIVED
+# (Purchase Price, Amount, Net Qty, Total Logistics, Total Cost, Net Revenue,
+# Margin(s), GST, Quarter/Month/Week, provisions=0, …) and computed on inject.
+# (label, position, dtype)  dtype ∈ text|num|date|qty|vertical|unit
+MANUAL_INPUT_FIELDS = [
+    ("Vertical", 85, "vertical"), ("Qty Unit", None, "unit"),
+    ("Date", 2, "date"), ("Shipment ID", 3, "text"), ("Material", 12, "text"),
+    ("Supplier Name", 4, "text"), ("GST Reg No.", 5, "text"),
+    ("Vendor Invoice No.", 6, "text"), ("Vendor Invoice Date", 7, "date"),
+    ("P V No.", 8, "text"), ("P V Date", 9, "date"),
+    ("State (Origin)", 10, "text"), ("Vehicle No.", 11, "text"),
+    ("Qty (Kg) [Purchase]", 13, "qty"), ("Price/Kg", 14, "num"),
+    ("Return Qty [Purchase]", 16, "num"), ("Basic Customs Duty", 18, "num"),
+    ("Transporter Name", 19, "text"), ("LR NO/BILL NO", 20, "text"),
+    ("J V No.", 21, "text"), ("JV Date", 22, "date"),
+    ("Logistics cost", 23, "num"), ("Debit note on logistic cost", 24, "num"),
+    ("Logistics Provision", 25, "num"), ("Operational Cost", 27, "num"),
+    ("Divertion/Internal [Purchase]", 29, "num"),
+    ("Debit Note No.", 30, "text"), ("Debit Note Date.", 31, "date"),
+    ("Debit Note No. 2", 32, "text"), ("Debit Note Date. 2", 33, "date"),
+    ("Full Debit Note", 34, "num"), ("Actual Debit Note", 35, "num"),
+    ("Inv. No.", 39, "text"), ("Customer ID", 40, "text"),
+    ("Buyer Name", 41, "text"), ("Buyer GST Number", 42, "text"),
+    ("Location (Origin)", 43, "text"), ("Location (Destination)", 44, "text"),
+    ("State (Destination)", 45, "text"),
+    ("Qty(Kg) [Sales]", 46, "qty"), ("Rate/Kg", 47, "num"),
+    ("Return Qty [Sales]", 50, "num"), ("Divertion/Internal [Sales]", 52, "num"),
+    ("Return Type", 53, "text"), ("Date : DN to Buyer", 54, "date"),
+    ("DN to Buyer Amount", 56, "num"),
+    ("Credit Note No:1", 57, "text"), ("CN Date. No:1", 58, "date"),
+    ("Credit Note No:2", 59, "text"), ("CN Date. No:2", 60, "date"),
+    ("Full Credit Notes", 61, "num"), ("Actual Credit Note", 62, "num"),
+    ("Remarks", 67, "text"), ("LMI @ Inception", 68, "num"),
+    ("Material-Short Form", 78, "text"), ("Supplier Type", 79, "text"),
+    ("Category (Material)", 84, "text"), ("POC Name", 86, "text"),
+    ("Bill Branch", 95, "text"), ("Vendor PAN No", 97, "text"),
+    ("Customer PAN No", 98, "text"), ("GST TDS Applicability", 99, "text"),
+    ("Cash Discount(Provision)", 100, "num"), ("Cash Discount", 101, "num"),
+    ("Cash Discount. No", 102, "text"), ("CD Date", 103, "date"), ("SD", 104, "text"),
+]
+MANUAL_LINES_COLS = [lbl for lbl, _p, _d in MANUAL_INPUT_FIELDS]
+MANUAL_QTY_UNIT_OPTIONS = ["Display (MT / units)", "Kg"]
+MANUAL_VERTICAL_OPTIONS = ["End Generator", "Plastic", "Re-Commerce", "ReWerse",
+                           "AFR", "M4", "IT AD", "Enterprise", "Processing Center"]
 # AFR tradable materials — always PURCHASE cost, never operational cost.
 # NB: no bare "char" — it substring-matches "Transport CHARges" (a service).
 _AFR_MATERIAL_KW = ("chilli", "chilly", "husk", "pyrolysis", "briquette")
@@ -296,18 +343,17 @@ def _manual_line_mask(df: pd.DataFrame) -> pd.Series:
 
 
 def inject_manual_line_items(profit_df: pd.DataFrame, ml: pd.DataFrame) -> pd.DataFrame:
-    """Append user-entered manual line items as profitability rows so they show in
-    the Details sheet AND flow into the summary (Sales/Purchase/Qty/Transport →
-    Gross & Net Margin). No CN/DN provision is applied — the entered numbers are
-    taken as final. Quantity is entered in the vertical's DISPLAY unit (MT for
-    weight verticals, units for IT AD / Re-Commerce / M4) and stored as Kg.
-    `ml` columns: 0 Vertical, 1 Month(mmm-yy), 2 Shipment ID, 3 Material,
-    4 Buyer Name, 5 Quantity, 6 Sales Amount, 7 Purchase Price, 8 Transportation."""
+    """Append user-entered manual line items as full profitability rows so they
+    show in the Details sheet AND flow into the summary. The user fills the RAW
+    input columns (MANUAL_INPUT_FIELDS); every DERIVED column is computed here with
+    the engine's formulas. No CN/DN provision is applied (Provision for CN/DN = 0)
+    — the entered numbers are final. Quantity is entered in the vertical's display
+    unit by default (MT verticals ×1000 → Kg) or as raw Kg when 'Qty Unit' = Kg."""
     if ml is None or getattr(ml, "empty", True) or profit_df is None or profit_df.empty:
         return profit_df
     cols = list(profit_df.columns)
     ncol = len(cols)
-    if ncol < 86:
+    if ncol < 105:
         return profit_df
 
     def _named(name):
@@ -319,37 +365,83 @@ def inject_manual_line_items(profit_df: pd.DataFrame, ml: pd.DataFrame) -> pd.Da
     def _num(v):
         return float(pd.to_numeric(pd.Series([v]), errors="coerce").fillna(0).iloc[0])
 
+    def _P(r, pos):   # numeric value already placed at a position (0 if blank)
+        return _num(r[cols[pos]]) if pos < ncol and r[cols[pos]] is not None else 0.0
+
+    def _fdate(v):    # ISO parsed as-is, else day-first (Indian DD-MM-YYYY)
+        s = str(v).strip()
+        return (pd.to_datetime(s, errors="coerce") if _re.match(r"^\d{4}-\d{1,2}-\d{1,2}", s)
+                else pd.to_datetime(s, errors="coerce", dayfirst=True))
+
     rows = []
     for i in range(len(ml)):
-        vert = str(ml.iloc[i, 0]).strip()
-        mdt = pd.to_datetime(str(ml.iloc[i, 1]).strip(), format="%b-%y", errors="coerce")
-        if not vert or vert.lower() == "nan" or pd.isna(mdt):
+        rec = {lbl: (ml.iloc[i][lbl] if lbl in ml.columns else None)
+               for lbl, _p, _d in MANUAL_INPUT_FIELDS}
+        vert = str(rec.get("Vertical", "")).strip()
+        dt = _fdate(rec.get("Date", ""))
+        if not vert or vert.lower() == "nan" or pd.isna(dt):
             continue
         vkey = "".join(c for c in vert.lower() if c.isalnum())
-        qty_disp = _num(ml.iloc[i, 5]); sales = _num(ml.iloc[i, 6])
-        pur = _num(ml.iloc[i, 7]); tr = _num(ml.iloc[i, 8])
-        qty_kg = qty_disp * (1 if vkey in _UNIT_VERTICALS else 1000)
-        # Enterprise / Processing Center live under 'Institutional Business' and
-        # split by the Shipment ID (SH… → Enterprise, else Processing Center).
-        bcat = ("Institutional Business"
-                if vkey in ("enterprise", "processingcenter", "institutionalbusiness", "ib")
-                else vert)
+        is_kg = str(rec.get("Qty Unit", "")).strip().lower().startswith("kg")
+        qfac = 1.0 if (is_kg or vkey in _UNIT_VERTICALS) else 1000.0
+
         r = {c: None for c in cols}
-        r[cols[1]] = mdt.strftime("%B")                       # Month (full name)
-        r[cols[2]] = mdt.strftime("%Y-%m-%d")                 # Date (1st of month)
-        if ncol > 80: r[cols[80]] = mdt.strftime("%b-%y")     # Month (mmm-yy)
-        r[cols[3]] = str(ml.iloc[i, 2]).strip()               # Shipment ID
-        if ncol > 41: r[cols[41]] = str(ml.iloc[i, 4]).strip()  # Buyer Name
-        r[cols[12]] = str(ml.iloc[i, 3]).strip() or "Manual Line Item"   # Material
-        r[cols[15]] = pur                                      # Purchase Price
-        if ncol > 46: r[cols[46]] = qty_kg                    # Qty(Kg) sales
-        if ncol > 51: r[cols[51]] = qty_kg                    # Net Qty sales
-        if ncol > 48: r[cols[48]] = sales                     # Amount (sales)
-        if ncol > 26: r[cols[26]] = tr                        # Total Logistics (transport)
-        if ncol > 64: r[cols[64]] = sales                     # Net Revenue (display)
-        if ncol > 37: r[cols[37]] = pur + tr                  # Total Cost (display)
-        if ncol > 65: r[cols[65]] = sales - (pur + tr)        # Margin (display)
-        r[cols[85]] = bcat                                    # Broad Category → vertical
+        # ── raw inputs into their positions ────────────────────────────────────
+        for lbl, pos, dt_kind in MANUAL_INPUT_FIELDS:
+            if pos is None or dt_kind in ("vertical", "unit"):
+                continue
+            v = rec.get(lbl)
+            if dt_kind == "num":
+                r[cols[pos]] = _num(v)
+            elif dt_kind == "qty":
+                r[cols[pos]] = _num(v) * qfac                     # display→Kg
+            elif dt_kind == "date":
+                _d = _fdate(v)
+                r[cols[pos]] = _d.strftime("%Y-%m-%d") if pd.notna(_d) else ""
+            else:  # text
+                s = "" if v is None else str(v).strip()
+                r[cols[pos]] = "" if s.lower() == "nan" else s
+        # Enterprise / Processing Center → Institutional Business (split by Shipment ID)
+        r[cols[85]] = ("Institutional Business"
+                       if vkey in ("enterprise", "processingcenter", "institutionalbusiness", "ib")
+                       else vert)
+        if not str(r[cols[12]]).strip():
+            r[cols[12]] = "Manual Line Item"                      # Material fallback
+
+        # ── derived columns (engine formulas) ───────────────────────────────────
+        qtyP, rateP = _P(r, 13), _P(r, 14)
+        pur = qtyP * rateP;                    r[cols[15]] = pur   # Purchase Price
+        r[cols[17]] = qtyP - _P(r, 16)                            # Net Qty (purch)
+        tlog = _P(r, 23) + _P(r, 24) + _P(r, 25); r[cols[26]] = tlog   # Total Logistics
+        r[cols[36]] = 0.0                                         # Provision for DN = 0
+        adn = _P(r, 35)
+        cst = pur + tlog + _P(r, 34) + _P(r, 18) + _P(r, 29) - adn - 0.0
+        r[cols[37]] = cst                                         # Total Cost
+        r[cols[28]] = round((pur + tlog) / (qtyP - _P(r, 16)), 4) if (qtyP - _P(r, 16)) else 0.0  # Cost/Kg
+        qtyS, rateS = _P(r, 46), _P(r, 47)
+        sales = qtyS * rateS;                  r[cols[48]] = sales  # Amount (sales)
+        r[cols[51]] = qtyS - _P(r, 50)                            # Net Qty (sales)
+        r[cols[63]] = 0.0                                         # Provision for CN = 0
+        acn = _P(r, 62)
+        nrev = sales + _P(r, 61) + _P(r, 52) + _P(r, 56) - acn - 0.0
+        r[cols[64]] = nrev                                        # Net Revenue
+        r[cols[65]] = nrev - cst                                  # Margin
+        r[cols[70]] = round((nrev - cst) / sales * 100, 2) if sales else 0.0  # Margin %
+        r[cols[72]] = acn                                         # Total CN(Inc.Prov)
+        r[cols[73]] = adn                                         # Total DN(Inc.Prov)
+        r[cols[75]] = acn                                         # Actaul CN (mirror)
+        r[cols[76]] = adn                                         # Actual DN (mirror)
+        # date-derived
+        _q = (dt.month - 4) // 3 % 4 + 1
+        r[cols[0]] = f"Q{_q}"                                     # Quarter (fiscal)
+        r[cols[1]] = dt.strftime("%b-%y"); r[cols[80]] = dt.strftime("%b-%y")  # Month, Month.1
+        r[cols[83]] = int(dt.strftime("%V"))                     # Week No
+        # financials with GST (display)
+        r[cols[87]] = sales - pur                                 # Gross Margin
+        r[cols[89]] = nrev - cst                                 # Net Margin
+        r[cols[90]] = round(sales * 1.18, 2)                     # Sales (GST)
+        r[cols[91]] = round(-pur * 1.18, 2)                      # Purchases (GST)
+        # markers
         if _cs is not None: r[_cs] = MANUAL_LINE_COST_SOURCE
         if _rn is not None: r[_rn] = "Manual line item (user-entered) — kept until edited"
         rows.append(r)

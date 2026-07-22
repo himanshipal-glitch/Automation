@@ -801,12 +801,14 @@ def reco_candidates(profit_df: pd.DataFrame) -> pd.DataFrame:
         "Purchase Price": pd.to_numeric(sub.iloc[:, 15], errors="coerce").fillna(0.0),
         "Cost Source": (sub[_csc].astype(str) if _csc else pd.Series("", index=sub.index)),
     })
-    out = (g.groupby("Shipment ID", as_index=False)
-             .agg({"Vertical": "first", "Invoice No": _uniq_join, "Date": "first",
-                   "Buyer Name": "first", "Material": _uniq_join,
+    # One row per (Shipment ID · Invoice No · Material) so each missing line is
+    # explicit — no lumping a shipment's materials across its different invoices.
+    out = (g.groupby(["Shipment ID", "Invoice No", "Material"], as_index=False)
+             .agg({"Vertical": "first", "Date": "first", "Buyer Name": "first",
                    "Amount": "sum", "Purchase Price": "sum",
                    "Cost Source": lambda x: _uniq_join(x) or "No Cost Found"}))[cols]
-    return out.sort_values(["Vertical", "Shipment ID"], ignore_index=True)
+    return out.sort_values(["Vertical", "Shipment ID", "Invoice No", "Material"],
+                           ignore_index=True)
 
 
 def _reco_exclusion_mask(df: pd.DataFrame, reco_ships: set | None) -> pd.Series:

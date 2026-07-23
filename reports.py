@@ -928,13 +928,16 @@ LAST_YEAR_COLS = ["Vertical", "Type", "SO Number", "Date", "Note Number", "Party
 
 def last_year_left_behind(profit_df: pd.DataFrame,
                           cn_df: pd.DataFrame | None,
-                          dn_df: pd.DataFrame | None) -> pd.DataFrame:
-    """CN & DN (from the MIS CN and DN sheets) whose shipment (Reference#) is NOT
-    in the current Details — i.e. SKIPPED when forming Details for this MIS. The
-    vertical is read from each note's own **Account** column (e.g. 'Marketplace
-    Sales (Metal)' → End Generator). Returns a DataFrame (LAST_YEAR_COLS) sorted
-    by Vertical, Type. Void notes excluded; a note referencing a comma-list of
-    shipments is left behind only if NONE of them are in Details."""
+                          dn_df: pd.DataFrame | None,
+                          bill_df: pd.DataFrame | None = None) -> pd.DataFrame:
+    """CN, DN & LOGISTICS bills (from the MIS CN/DN sheets and the Bill sheet's
+    'Marketplace Logistics' rows) whose shipment is NOT in the current Details —
+    i.e. SKIPPED when forming Details for this MIS. The vertical is read from each
+    row's own **Account** column and kept ONLY for REPORTED marketplace verticals
+    (others dropped). Returns a DataFrame (LAST_YEAR_COLS) sorted by Vertical,
+    Type (CN / DN / Logistics). Display-only — never feeds back into any total.
+    Void rows excluded; a row referencing a comma-list of shipments is left behind
+    only if NONE of them are in Details."""
     det: set = set()
     if profit_df is not None and not getattr(profit_df, "empty", True) and profit_df.shape[1] > 3:
         for s in profit_df.iloc[:, 3].astype(str):
@@ -944,8 +947,9 @@ def last_year_left_behind(profit_df: pd.DataFrame,
                     det.add(p)
 
     def _is_left(v):
-        ships = [p.strip() for p in str(v).split(",") if p.strip()]
-        return bool(ships) and not any(p in det for p in ships)
+        ships = [p.strip() for p in str(v).split(",")
+                 if p.strip() and p.strip().lower() not in ("nan", "none", "nat")]
+        return bool(ships) and not any(p in det for p in ships)   # real shipment(s), none in Details
 
     def _extract(df, typ, date_names, num_names, party_names, status_names):
         if df is None or getattr(df, "empty", True):
@@ -995,7 +999,18 @@ def last_year_left_behind(profit_df: pd.DataFrame,
                   ("vendor name",), ("vendor credit status", "status"))
     cn = _extract(cn_df, "CN", ("credit note date",), ("credit note number",),
                   ("customer name",), ("credit note status", "status"))
-    out = pd.concat([dn, cn], ignore_index=True)
+    # Logistics: Bill-sheet rows whose Account is 'Marketplace Logistics (...)'
+    # and whose shipment isn't in Details → last-year logistics table.
+    log = pd.DataFrame(columns=LAST_YEAR_COLS)
+    if bill_df is not None and not getattr(bill_df, "empty", True):
+        _accc = next((c for c in bill_df.columns if str(c).strip().lower() == "account"), None)
+        if _accc is not None:
+            _logb = bill_df[bill_df[_accc].astype(str).str.contains("marketplace logistics",
+                                                                     case=False, na=False)]
+            log = _extract(_logb, "Logistics", ("bill date", "date"),
+                           ("bill number", "lr no", "bill no"),
+                           ("vendor name", "transporter name"), ("bill status", "status"))
+    out = pd.concat([dn, cn, log], ignore_index=True)
     if out.empty:
         return pd.DataFrame(columns=LAST_YEAR_COLS)
     return out.sort_values(["Vertical", "Type", "SO Number"], ignore_index=True)
@@ -2123,7 +2138,8 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
                       op_cost_bills: pd.DataFrame | None = None,
                       acct_txn_df: pd.DataFrame | None = None,
                       cn_df: pd.DataFrame | None = None,
-                      dn_df: pd.DataFrame | None = None) -> bytes:
+                      dn_df: pd.DataFrame | None = None,
+                      bill_df: pd.DataFrame | None = None) -> bytes:
     """One Excel with four stacked sheets — Summary, Receivables, Payables,
     Details (the profitability report). If `vertical` is given, everything is
     filtered to it; otherwise all verticals are included (stacked by type).
@@ -2549,9 +2565,9 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
         # Notes (from the MIS CN & DN sheets) whose shipment isn't in the current
         # Details — last-year shipments still receiving CN/DN. Vertical from each
         # note's Account column. Per-Vertical×Type subtotals + detail. Data only.
-        if cn_df is not None or dn_df is not None:
+        if cn_df is not None or dn_df is not None or bill_df is not None:
             try:
-                _lb = last_year_left_behind(profit_df, cn_df, dn_df)
+                _lb = last_year_left_behind(profit_df, cn_df, dn_df, bill_df)
                 # Per-vertical workbook → only THAT vertical's left-behind notes.
                 if vertical and len(_lb):
                     _vt = "".join(c for c in str(vertical).lower() if c.isalnum())

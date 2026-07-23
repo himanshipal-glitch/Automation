@@ -224,7 +224,7 @@ with st.container(key="rkheader"):
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
         with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.3.4"):
-            st.caption("build: **v3.14.0 — Manual line items: 🔍 fetch+edit an existing line (overrides it), a Reason box per entry, and an Apply toggle — on each MIS a stored entry matching a live line (Shipment·Invoice·Material) shows 'Matches live?'; Apply replaces the live line with your version, untick keeps live. 'Last Year Shipments' sheet now lists ONLY the reported marketplace verticals (Fare/Boarding/E-Waste/etc. dropped); per-vertical download shows only that vertical. New 'Last Year Shipments' sheet: CN/DN (from the MIS CN & DN sheets) whose shipment isn't in Details for this MIS, vertical read from each note's Account column; per-vertical×type subtotals + detail. Manual line items: 🔍 Fetch an existing shipment's line items from Details, load one into the editor, tweak any column; on Save it REPLACES that computed line (no double-count). Reco review: adds Supplier Name + Vendor Invoice No; decisions now PERSISTED (remembered across MIS uploads); split into 🆕 New MIS shipments vs 📁 Previously stored regions (new→stored on Save); summary gated only while unsaved new shipments exist. Manual line items: each input column shows its expected format (Date YYYY-MM-DD/DD-MM-YYYY, numbers plain, Qty per Qty-Unit) via column tooltips + a format legend. Full raw-input column set (all non-derived Details fields); the engine computes every derived column (Purchase/Amount/Net Qty/Total Cost/Net Revenue/Margins/GST) in real time. Per-row Qty Unit toggle (Display MT/units vs Kg). Stored per-vertical until edited; no auto-provision. Reco review: blank-shipment charge legs (bill + invoice) that match by material are a COMPLETE transaction, so they're dropped from the review (they stay in Details/summary); only genuinely one-sided blank-shipment items remain. DN provision base is now (Purchase Price + Transportation Charges) × rate, not Purchase Price alone (all verticals with a provision). Invoice-line matching keyed by shipment+material+INVOICE NO, so same-shipment/same-material lines on different invoices (e.g. End Generator resell, SH072616016) stay separate instead of being summed. M4 quantity now counts UNITS (like IT AD/Re-Commerce), not MT — fixes M4 FY-total quantity (was collapsing to ~0 via Kg÷1000 vs the frozen unit count). Receivables vertical from the Account Transactions sheet (VLOOKUP transaction_number→entity_number→account_name), prefix logic only as fallback for txns absent there. 8th sheet ingested. IB warehouse/B2B split unchanged. AFR 2.5% provision; editable per-vertical provision %; Reco per-line exclusion.**")
+            st.caption("build: **v3.15.0 — Last Year sheet adds a Logistics Bill table (Marketplace Logistics bills whose shipment isn't in Details, reported verticals only); blank-shipment rows excluded; Cash Discount table pending spec. Manual line items: 🔍 fetch+edit an existing line (overrides it), a Reason box per entry, and an Apply toggle — on each MIS a stored entry matching a live line (Shipment·Invoice·Material) shows 'Matches live?'; Apply replaces the live line with your version, untick keeps live. 'Last Year Shipments' sheet now lists ONLY the reported marketplace verticals (Fare/Boarding/E-Waste/etc. dropped); per-vertical download shows only that vertical. New 'Last Year Shipments' sheet: CN/DN (from the MIS CN & DN sheets) whose shipment isn't in Details for this MIS, vertical read from each note's Account column; per-vertical×type subtotals + detail. Manual line items: 🔍 Fetch an existing shipment's line items from Details, load one into the editor, tweak any column; on Save it REPLACES that computed line (no double-count). Reco review: adds Supplier Name + Vendor Invoice No; decisions now PERSISTED (remembered across MIS uploads); split into 🆕 New MIS shipments vs 📁 Previously stored regions (new→stored on Save); summary gated only while unsaved new shipments exist. Manual line items: each input column shows its expected format (Date YYYY-MM-DD/DD-MM-YYYY, numbers plain, Qty per Qty-Unit) via column tooltips + a format legend. Full raw-input column set (all non-derived Details fields); the engine computes every derived column (Purchase/Amount/Net Qty/Total Cost/Net Revenue/Margins/GST) in real time. Per-row Qty Unit toggle (Display MT/units vs Kg). Stored per-vertical until edited; no auto-provision. Reco review: blank-shipment charge legs (bill + invoice) that match by material are a COMPLETE transaction, so they're dropped from the review (they stay in Details/summary); only genuinely one-sided blank-shipment items remain. DN provision base is now (Purchase Price + Transportation Charges) × rate, not Purchase Price alone (all verticals with a provision). Invoice-line matching keyed by shipment+material+INVOICE NO, so same-shipment/same-material lines on different invoices (e.g. End Generator resell, SH072616016) stay separate instead of being summed. M4 quantity now counts UNITS (like IT AD/Re-Commerce), not MT — fixes M4 FY-total quantity (was collapsing to ~0 via Kg÷1000 vs the frozen unit count). Receivables vertical from the Account Transactions sheet (VLOOKUP transaction_number→entity_number→account_name), prefix logic only as fallback for txns absent there. 8th sheet ingested. IB warehouse/B2B split unchanged. AFR 2.5% provision; editable per-vertical provision %; Reco per-line exclusion.**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())
@@ -1514,15 +1514,18 @@ elif page == "Summary Report":
         # Account Transactions sheet → authoritative per-transaction vertical for
         # receivables attribution (VLOOKUP transaction_number → account_name).
         _acct_txn = db.read_table("AcctTxn", "raw").drop(columns=["_source_file"], errors="ignore")
-        # MIS CN/DN sheets → 'Last Year Shipments' (notes whose shipment isn't in Details).
+        # MIS CN/DN + Bill sheets → 'Last Year Shipments' (CN/DN + Logistics whose
+        # shipment isn't in Details).
         _cn_raw = db.read_table("CN", "raw").drop(columns=["_source_file"], errors="ignore")
         _dn_raw = db.read_table("DN", "raw").drop(columns=["_source_file"], errors="ignore")
+        _bill_raw = db.read_table("Bill", "raw").drop(columns=["_source_file"], errors="ignore")
         _ar = ar_df if not ar_df.empty else None
         _ap = ap_df if not ap_df.empty else None
         _obills = op_bills if not op_bills.empty else None
         _atxn = _acct_txn if not _acct_txn.empty else None
         _cn = _cn_raw if not _cn_raw.empty else None
         _dn = _dn_raw if not _dn_raw.empty else None
+        _bill = _bill_raw if not _bill_raw.empty else None
 
         # ── Re-Commerce: FIXED signed-off detail up to the cutover (17-07-2026);
         # everything AFTER it is built LIVE from the Amazon × Recykal Google
@@ -1855,9 +1858,9 @@ elif page == "Summary Report":
         if not _ml_store.empty:
             profit_df = reports.inject_manual_line_items(profit_df, _ml_store)
 
-        # ── Last Year Shipments — CN/DN left behind from Details (preview) ────
-        if _cn is not None or _dn is not None:
-            _lb = reports.last_year_left_behind(profit_df, _cn, _dn)
+        # ── Last Year Shipments — CN/DN + Logistics left behind (preview) ─────
+        if _cn is not None or _dn is not None or _bill is not None:
+            _lb = reports.last_year_left_behind(profit_df, _cn, _dn, _bill)
             with st.expander(f"🗂️ Last Year Shipments — {len(_lb)} CN/DN left behind "
                              "(shipment not in Details)"):
                 st.caption("Credit/Debit notes (from the MIS **CN & DN sheets**) whose shipment "
@@ -2005,7 +2008,7 @@ elif page == "Summary Report":
                         _wb_v = reports.combined_workbook(
                             summaries, _sel_pdf, _ar, _ap, vertical=name, reco_ships=reco_ships,
                             rc_ns_summary=_rc_ns if name == "Re-Commerce" else None,
-                            op_cost_bills=_obills, acct_txn_df=_atxn, cn_df=_cn, dn_df=_dn)
+                            op_cost_bills=_obills, acct_txn_df=_atxn, cn_df=_cn, dn_df=_dn, bill_df=_bill)
                         st.download_button(
                             f"⬇ Download {name} (Excel — Summary · Receivables · Payables · Report)",
                             _wb_v, file_name=f"profitability_{safe}.xlsx",
@@ -2037,7 +2040,7 @@ elif page == "Summary Report":
                 _s = summaries if _lbl == _sel else _build(_pdf)
                 _wb_all = reports.combined_workbook(_s, _pdf, _ar, _ap, reco_ships=reco_ships,
                                                     rc_ns_summary=_rc_ns, op_cost_bills=_obills,
-                                                    acct_txn_df=_atxn, cn_df=_cn, dn_df=_dn)
+                                                    acct_txn_df=_atxn, cn_df=_cn, dn_df=_dn, bill_df=_bill)
                 st.download_button(
                     f"⬇ Download ALL Verticals{_sfx} (Excel — Summary · Receivables · Payables · Report)",
                     _wb_all, file_name=_fn,
@@ -2105,7 +2108,7 @@ elif page == "Summary Report":
                             continue
                         _wb = reports.combined_workbook(_s, _pdf, _ar, _ap, vertical=_v, reco_ships=reco_ships,
                                                         rc_ns_summary=_rc_ns if _v == "Re-Commerce" else None,
-                                                        op_cost_bills=_obills, acct_txn_df=_atxn, cn_df=_cn, dn_df=_dn)
+                                                        op_cost_bills=_obills, acct_txn_df=_atxn, cn_df=_cn, dn_df=_dn, bill_df=_bill)
                         _rcpts = only_to or _rbv.get(_v, _base_to)
                         _safe = _v.replace("(", "_").replace(")", "").replace("/", "-").replace(" ", "_")
                         _vbody = _body.replace("Profitability Report", f"Profitability Report - {_v}")
@@ -2117,7 +2120,7 @@ elif page == "Summary Report":
                 else:
                     _wb = reports.combined_workbook(_s, _pdf, _ar, _ap, reco_ships=reco_ships,
                                                     rc_ns_summary=_rc_ns, op_cost_bills=_obills,
-                                                    acct_txn_df=_atxn, cn_df=_cn, dn_df=_dn)
+                                                    acct_txn_df=_atxn, cn_df=_cn, dn_df=_dn, bill_df=_bill)
                     _ok, _msg = _mailer.send_report(
                         only_to or _base_to, f"{_subj}{_vsfx}", _body, _wb,
                         f"profitability_all{_fsfx}.xlsx", _cfg,

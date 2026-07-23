@@ -224,7 +224,7 @@ with st.container(key="rkheader"):
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
         with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.3.4"):
-            st.caption("build: **v3.15.0 — Last Year sheet adds a Logistics Bill table (Marketplace Logistics bills whose shipment isn't in Details, reported verticals only); blank-shipment rows excluded; Cash Discount table pending spec. Manual line items: 🔍 fetch+edit an existing line (overrides it), a Reason box per entry, and an Apply toggle — on each MIS a stored entry matching a live line (Shipment·Invoice·Material) shows 'Matches live?'; Apply replaces the live line with your version, untick keeps live. 'Last Year Shipments' sheet now lists ONLY the reported marketplace verticals (Fare/Boarding/E-Waste/etc. dropped); per-vertical download shows only that vertical. New 'Last Year Shipments' sheet: CN/DN (from the MIS CN & DN sheets) whose shipment isn't in Details for this MIS, vertical read from each note's Account column; per-vertical×type subtotals + detail. Manual line items: 🔍 Fetch an existing shipment's line items from Details, load one into the editor, tweak any column; on Save it REPLACES that computed line (no double-count). Reco review: adds Supplier Name + Vendor Invoice No; decisions now PERSISTED (remembered across MIS uploads); split into 🆕 New MIS shipments vs 📁 Previously stored regions (new→stored on Save); summary gated only while unsaved new shipments exist. Manual line items: each input column shows its expected format (Date YYYY-MM-DD/DD-MM-YYYY, numbers plain, Qty per Qty-Unit) via column tooltips + a format legend. Full raw-input column set (all non-derived Details fields); the engine computes every derived column (Purchase/Amount/Net Qty/Total Cost/Net Revenue/Margins/GST) in real time. Per-row Qty Unit toggle (Display MT/units vs Kg). Stored per-vertical until edited; no auto-provision. Reco review: blank-shipment charge legs (bill + invoice) that match by material are a COMPLETE transaction, so they're dropped from the review (they stay in Details/summary); only genuinely one-sided blank-shipment items remain. DN provision base is now (Purchase Price + Transportation Charges) × rate, not Purchase Price alone (all verticals with a provision). Invoice-line matching keyed by shipment+material+INVOICE NO, so same-shipment/same-material lines on different invoices (e.g. End Generator resell, SH072616016) stay separate instead of being summed. M4 quantity now counts UNITS (like IT AD/Re-Commerce), not MT — fixes M4 FY-total quantity (was collapsing to ~0 via Kg÷1000 vs the frozen unit count). Receivables vertical from the Account Transactions sheet (VLOOKUP transaction_number→entity_number→account_name), prefix logic only as fallback for txns absent there. 8th sheet ingested. IB warehouse/B2B split unchanged. AFR 2.5% provision; editable per-vertical provision %; Reco per-line exclusion.**")
+            st.caption("build: **v3.15.1 — Manual fetch now finds shipments reliably (case/space-insensitive, comma-list & substring match, over current MIS + history, with fallback) — was missing on exact-match. Last Year sheet adds a Logistics Bill table (Marketplace Logistics bills whose shipment isn't in Details, reported verticals only); blank-shipment rows excluded; Cash Discount table pending spec. Manual line items: 🔍 fetch+edit an existing line (overrides it), a Reason box per entry, and an Apply toggle — on each MIS a stored entry matching a live line (Shipment·Invoice·Material) shows 'Matches live?'; Apply replaces the live line with your version, untick keeps live. 'Last Year Shipments' sheet now lists ONLY the reported marketplace verticals (Fare/Boarding/E-Waste/etc. dropped); per-vertical download shows only that vertical. New 'Last Year Shipments' sheet: CN/DN (from the MIS CN & DN sheets) whose shipment isn't in Details for this MIS, vertical read from each note's Account column; per-vertical×type subtotals + detail. Manual line items: 🔍 Fetch an existing shipment's line items from Details, load one into the editor, tweak any column; on Save it REPLACES that computed line (no double-count). Reco review: adds Supplier Name + Vendor Invoice No; decisions now PERSISTED (remembered across MIS uploads); split into 🆕 New MIS shipments vs 📁 Previously stored regions (new→stored on Save); summary gated only while unsaved new shipments exist. Manual line items: each input column shows its expected format (Date YYYY-MM-DD/DD-MM-YYYY, numbers plain, Qty per Qty-Unit) via column tooltips + a format legend. Full raw-input column set (all non-derived Details fields); the engine computes every derived column (Purchase/Amount/Net Qty/Total Cost/Net Revenue/Margins/GST) in real time. Per-row Qty Unit toggle (Display MT/units vs Kg). Stored per-vertical until edited; no auto-provision. Reco review: blank-shipment charge legs (bill + invoice) that match by material are a COMPLETE transaction, so they're dropped from the review (they stay in Details/summary); only genuinely one-sided blank-shipment items remain. DN provision base is now (Purchase Price + Transportation Charges) × rate, not Purchase Price alone (all verticals with a provision). Invoice-line matching keyed by shipment+material+INVOICE NO, so same-shipment/same-material lines on different invoices (e.g. End Generator resell, SH072616016) stay separate instead of being summed. M4 quantity now counts UNITS (like IT AD/Re-Commerce), not MT — fixes M4 FY-total quantity (was collapsing to ~0 via Kg÷1000 vs the frozen unit count). Receivables vertical from the Account Transactions sheet (VLOOKUP transaction_number→entity_number→account_name), prefix logic only as fallback for txns absent there. 8th sheet ingested. IB warehouse/B2B split unchanged. AFR 2.5% provision; editable per-vertical provision %; Reco per-line exclusion.**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())
@@ -1745,9 +1745,18 @@ elif page == "Summary Report":
                                     label_visibility="collapsed", placeholder="Shipment ID")
             if _fc2.button("🔍 Fetch", key="ml_fetch_btn"):
                 if _fsid.strip():
+                    _tgt = _fsid.strip().upper()
+                    # search the FULL built Details (current MIS + accumulated history);
+                    # fall back to the current profit_df if the merged view is empty.
                     _dv = db.profit_details_view(profit_df)
-                    _hit = _dv[_dv.iloc[:, 3].astype(str).str.strip() == _fsid.strip()]
-                    st.session_state["ml_fetch_hits"] = _hit.reset_index(drop=True)
+                    if _dv is None or _dv.empty:
+                        _dv = profit_df
+                    _c3 = _dv.iloc[:, 3].astype(str).str.upper()
+                    # match exact, as one of a comma-list of shipments, or substring
+                    _mask = _c3.map(lambda s: _tgt in [p.strip() for p in s.split(",")]
+                                    or _tgt in s.replace(" ", ""))
+                    st.session_state["ml_fetch_hits"] = _dv[_mask.values].reset_index(drop=True)
+                    st.session_state["ml_fetch_scanned"] = len(_dv)
                 else:
                     st.session_state.pop("ml_fetch_hits", None)
             _hits = st.session_state.get("ml_fetch_hits")
@@ -1787,7 +1796,10 @@ elif page == "Summary Report":
                     st.session_state.pop("ml_fetch_hits", None)
                     st.rerun()
             elif _hits is not None:
-                st.caption("No line items found for that Shipment ID in the Details.")
+                _sc = st.session_state.get("ml_fetch_scanned", 0)
+                st.caption(f"No line items found for that Shipment ID (searched {_sc:,} Details "
+                           "rows — current MIS + accumulated history). Check the ID; it must "
+                           "exist in the Details/Summary you see below.")
 
             _ml_seed = _ml_store if not _ml_store.empty else pd.DataFrame(
                 {c: pd.Series(dtype=("float" if c in _ml_numset else "str")) for c in _ml_cols})

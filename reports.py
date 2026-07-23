@@ -2649,10 +2649,7 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
                             return vv in ("itad", "itassetsdisposition", "itassets")
                         return vv == _vt
                     _lb = _lb[_lb["Vertical"].map(_vmatch)].reset_index(drop=True)
-                try:
-                    _inp = _dbm.last_year_inputs_map() if _dbm is not None else {}
-                except Exception:
-                    _inp = {}
+                from openpyxl.utils import get_column_letter as _gcl
                 _shn = "Last Year Shipments"
                 _BW = 7                                   # columns per side-by-side block
                 # per-table: opening-provision label · 'Pertaining to FY' label ·
@@ -2688,18 +2685,21 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
                             _c0 = _ti * _BW
                             _cfg = _CFG[_t]
                             _tb = _lb[(_lb["Vertical"].astype(str) == _v) & (_lb["Type"] == _t)]
-                            _prov = round(_inp.get((_v, _t), {}).get("provision", 0.0), 2)
-                            _nodn = round(_inp.get((_v, _t), {}).get("no_dn", 0.0), 2)
                             _acct = round(float(_tb["Amount"].sum()), 2) if len(_tb) else 0.0
-                            _close = round(_prov - _acct - _nodn, 2)
+                            # provision + NO-DN are entered MANUALLY in Excel (left
+                            # blank here); Closing Provision is a live formula that
+                            # recomputes = provision − accounted − NO-DN once filled.
+                            _amtL = _gcl(_c0 + 3)                     # Amount column letter
+                            _rowP, _rowA, _rowN = _top + 3, _top + 4, _top + 5   # excel rows
+                            _close = f"={_amtL}{_rowP}-{_amtL}{_rowA}-{_amtL}{_rowN}"
                             # title
                             pd.DataFrame([[_t]]).to_excel(w, sheet_name=_shn, startrow=_top,
                                                           startcol=_c0, index=False, header=False)
                             _headers.append((_shn, _top + 1))
-                            # 4-row summary
-                            pd.DataFrame([["", _cfg["prov"], _prov],
+                            # 4-row summary (provision/NO-DN blank for manual entry)
+                            pd.DataFrame([["", _cfg["prov"], None],
                                           ["", "Accounted in FY 2026-27", _acct],
-                                          ["", "NO DN value", _nodn],
+                                          ["", "NO DN value", None],
                                           ["", "Closing Provision", _close]],
                                          columns=["JV Number", "Particulars", "Amount"]) \
                                 .to_excel(w, sheet_name=_shn, startrow=_top + 1, startcol=_c0, index=False)

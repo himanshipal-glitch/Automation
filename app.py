@@ -224,7 +224,7 @@ with st.container(key="rkheader"):
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
         with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.3.4"):
-            st.caption("build: **v3.15.1 — Manual fetch now finds shipments reliably (case/space-insensitive, comma-list & substring match, over current MIS + history, with fallback) — was missing on exact-match. Last Year sheet adds a Logistics Bill table (Marketplace Logistics bills whose shipment isn't in Details, reported verticals only); blank-shipment rows excluded; Cash Discount table pending spec. Manual line items: 🔍 fetch+edit an existing line (overrides it), a Reason box per entry, and an Apply toggle — on each MIS a stored entry matching a live line (Shipment·Invoice·Material) shows 'Matches live?'; Apply replaces the live line with your version, untick keeps live. 'Last Year Shipments' sheet now lists ONLY the reported marketplace verticals (Fare/Boarding/E-Waste/etc. dropped); per-vertical download shows only that vertical. New 'Last Year Shipments' sheet: CN/DN (from the MIS CN & DN sheets) whose shipment isn't in Details for this MIS, vertical read from each note's Account column; per-vertical×type subtotals + detail. Manual line items: 🔍 Fetch an existing shipment's line items from Details, load one into the editor, tweak any column; on Save it REPLACES that computed line (no double-count). Reco review: adds Supplier Name + Vendor Invoice No; decisions now PERSISTED (remembered across MIS uploads); split into 🆕 New MIS shipments vs 📁 Previously stored regions (new→stored on Save); summary gated only while unsaved new shipments exist. Manual line items: each input column shows its expected format (Date YYYY-MM-DD/DD-MM-YYYY, numbers plain, Qty per Qty-Unit) via column tooltips + a format legend. Full raw-input column set (all non-derived Details fields); the engine computes every derived column (Purchase/Amount/Net Qty/Total Cost/Net Revenue/Margins/GST) in real time. Per-row Qty Unit toggle (Display MT/units vs Kg). Stored per-vertical until edited; no auto-provision. Reco review: blank-shipment charge legs (bill + invoice) that match by material are a COMPLETE transaction, so they're dropped from the review (they stay in Details/summary); only genuinely one-sided blank-shipment items remain. DN provision base is now (Purchase Price + Transportation Charges) × rate, not Purchase Price alone (all verticals with a provision). Invoice-line matching keyed by shipment+material+INVOICE NO, so same-shipment/same-material lines on different invoices (e.g. End Generator resell, SH072616016) stay separate instead of being summed. M4 quantity now counts UNITS (like IT AD/Re-Commerce), not MT — fixes M4 FY-total quantity (was collapsing to ~0 via Kg÷1000 vs the frozen unit count). Receivables vertical from the Account Transactions sheet (VLOOKUP transaction_number→entity_number→account_name), prefix logic only as fallback for txns absent there. 8th sheet ingested. IB warehouse/B2B split unchanged. AFR 2.5% provision; editable per-vertical provision %; Reco per-line exclusion.**")
+            st.caption("build: **v3.16.0 — Last Year sheet: 4 side-by-side tables per vertical (CN excl cash-discount · DN · Cash Discount [CN-sheet 'Cash Discount' accounts, vertical from Account Transactions] · Logistics), each with a 3-row JV summary (Marketplace provision [manual, entered after reco] · Accounted in FY 2026-27 [auto Σ] · NO DN value [manual]). Manual fetch now finds shipments reliably (case/space-insensitive, comma-list & substring match, over current MIS + history, with fallback) — was missing on exact-match. Last Year sheet adds a Logistics Bill table (Marketplace Logistics bills whose shipment isn't in Details, reported verticals only); blank-shipment rows excluded; Cash Discount table pending spec. Manual line items: 🔍 fetch+edit an existing line (overrides it), a Reason box per entry, and an Apply toggle — on each MIS a stored entry matching a live line (Shipment·Invoice·Material) shows 'Matches live?'; Apply replaces the live line with your version, untick keeps live. 'Last Year Shipments' sheet now lists ONLY the reported marketplace verticals (Fare/Boarding/E-Waste/etc. dropped); per-vertical download shows only that vertical. New 'Last Year Shipments' sheet: CN/DN (from the MIS CN & DN sheets) whose shipment isn't in Details for this MIS, vertical read from each note's Account column; per-vertical×type subtotals + detail. Manual line items: 🔍 Fetch an existing shipment's line items from Details, load one into the editor, tweak any column; on Save it REPLACES that computed line (no double-count). Reco review: adds Supplier Name + Vendor Invoice No; decisions now PERSISTED (remembered across MIS uploads); split into 🆕 New MIS shipments vs 📁 Previously stored regions (new→stored on Save); summary gated only while unsaved new shipments exist. Manual line items: each input column shows its expected format (Date YYYY-MM-DD/DD-MM-YYYY, numbers plain, Qty per Qty-Unit) via column tooltips + a format legend. Full raw-input column set (all non-derived Details fields); the engine computes every derived column (Purchase/Amount/Net Qty/Total Cost/Net Revenue/Margins/GST) in real time. Per-row Qty Unit toggle (Display MT/units vs Kg). Stored per-vertical until edited; no auto-provision. Reco review: blank-shipment charge legs (bill + invoice) that match by material are a COMPLETE transaction, so they're dropped from the review (they stay in Details/summary); only genuinely one-sided blank-shipment items remain. DN provision base is now (Purchase Price + Transportation Charges) × rate, not Purchase Price alone (all verticals with a provision). Invoice-line matching keyed by shipment+material+INVOICE NO, so same-shipment/same-material lines on different invoices (e.g. End Generator resell, SH072616016) stay separate instead of being summed. M4 quantity now counts UNITS (like IT AD/Re-Commerce), not MT — fixes M4 FY-total quantity (was collapsing to ~0 via Kg÷1000 vs the frozen unit count). Receivables vertical from the Account Transactions sheet (VLOOKUP transaction_number→entity_number→account_name), prefix logic only as fallback for txns absent there. 8th sheet ingested. IB warehouse/B2B split unchanged. AFR 2.5% provision; editable per-vertical provision %; Reco per-line exclusion.**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())
@@ -1649,6 +1649,40 @@ elif page == "Summary Report":
             st.stop()
         reco_ships = {k for k in _cur_keys if _reco_dec.get(k, False)}
 
+        # ── Last Year provisions — manual inputs (after Reco, before summary) ─
+        # Per (Vertical, Table) figures for the Last Year sheet's 3-row summary:
+        # the Marketplace CN/DN & expense provision, and the NO-DN value.
+        _ly_store = db.load_last_year_inputs()
+        with st.expander(f"🗓️ Last Year provisions — {len(_ly_store)} stored "
+                         "(CN / DN / Cash Discount / Logistics per vertical)"):
+            st.caption("For each **vertical × table** in the **Last Year Shipments** sheet, enter "
+                       "the **Marketplace CN, DN & expense provision** and the **NO DN value**. "
+                       "'Accounted in FY 2026-27' is computed automatically (Σ of that table's "
+                       "Amount). Stored until changed — enter these before relying on the "
+                       "summary/details.")
+            st.caption(_durability_note)
+            _ly_seed = _ly_store if not _ly_store.empty else pd.DataFrame(
+                {"Vertical": pd.Series(dtype="str"), "Table": pd.Series(dtype="str"),
+                 "Provision": pd.Series(dtype="float"), "NO DN Value": pd.Series(dtype="float")})
+            _ly_res = st.data_editor(
+                _ly_seed, num_rows="dynamic", use_container_width=True, key="ly_editor",
+                column_config={
+                    "Vertical": st.column_config.SelectboxColumn(
+                        "Vertical", options=reports.MANUAL_VERTICAL_OPTIONS, required=True),
+                    "Table": st.column_config.SelectboxColumn(
+                        "Table", options=db.LAST_YEAR_TABLES, required=True),
+                    "Provision": st.column_config.NumberColumn(
+                        "Marketplace CN/DN & expense provision"),
+                    "NO DN Value": st.column_config.NumberColumn("NO DN value"),
+                })
+            _lym = st.session_state.pop("ly_save_msg", None)
+            if _lym:
+                (st.warning if "⚠" in _lym else st.success)(_lym)
+            if st.button("💾 Save Last Year provisions", key="ly_save"):
+                _n = db.save_last_year_inputs(_ly_res)
+                st.session_state["ly_save_msg"] = _save_feedback(_n, "Last Year provision row(s)")
+                st.rerun()
+
         # ── ENTERPRISE manual inputs (after Reco review) ────────────────────
         # 1) Custom Duty bills: shipments with NO bill/invoice side in Zoho,
         #    entered as manual purchases into a chosen month. Enterprise ONLY.
@@ -1870,9 +1904,9 @@ elif page == "Summary Report":
         if not _ml_store.empty:
             profit_df = reports.inject_manual_line_items(profit_df, _ml_store)
 
-        # ── Last Year Shipments — CN/DN + Logistics left behind (preview) ─────
+        # ── Last Year Shipments — CN/DN + Cash Discount + Logistics (preview) ─
         if _cn is not None or _dn is not None or _bill is not None:
-            _lb = reports.last_year_left_behind(profit_df, _cn, _dn, _bill)
+            _lb = reports.last_year_left_behind(profit_df, _cn, _dn, _bill, _atxn)
             with st.expander(f"🗂️ Last Year Shipments — {len(_lb)} CN/DN left behind "
                              "(shipment not in Details)"):
                 st.caption("Credit/Debit notes (from the MIS **CN & DN sheets**) whose shipment "

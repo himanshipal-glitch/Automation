@@ -926,10 +926,33 @@ def apply_recommerce_manual(base_df: pd.DataFrame,
 LAST_YEAR_COLS = ["Vertical", "Type", "SO Number", "Date", "Note Number", "Party", "Amount"]
 
 
+def _acct_shipment_vertical(acct_txn_df) -> dict:
+    """{SHIPMENT (upper) → reported vertical} from Account Transactions
+    (reference_number → account_name token). Used to give Cash-Discount CN rows a
+    vertical, since their own Account parenthetical is the customer, not a vertical."""
+    if acct_txn_df is None or getattr(acct_txn_df, "empty", True):
+        return {}
+    low = {str(c).strip().lower(): c for c in acct_txn_df.columns}
+    ref = low.get("reference_number") or low.get("reference number") or low.get("reference#")
+    an = low.get("account_name") or low.get("account name") or low.get("account")
+    if ref is None or an is None:
+        return {}
+    import receivables as _recv
+    tok = (acct_txn_df[an].astype(str).str.extract(r"\((.*?)\)", expand=False)
+           .fillna("").str.strip().str.lower())
+    vert = tok.map(_recv.ACCT_NAME_TO_VERTICAL)
+    out = {}
+    for s, v in zip(acct_txn_df[ref].astype(str).str.strip().str.upper(), vert):
+        if s and s not in out and pd.notna(v):
+            out[s] = v
+    return out
+
+
 def last_year_left_behind(profit_df: pd.DataFrame,
                           cn_df: pd.DataFrame | None,
                           dn_df: pd.DataFrame | None,
-                          bill_df: pd.DataFrame | None = None) -> pd.DataFrame:
+                          bill_df: pd.DataFrame | None = None,
+                          acct_txn_df: pd.DataFrame | None = None) -> pd.DataFrame:
     """CN, DN & LOGISTICS bills (from the MIS CN/DN sheets and the Bill sheet's
     'Marketplace Logistics' rows) whose shipment is NOT in the current Details —
     i.e. SKIPPED when forming Details for this MIS. The vertical is read from each
@@ -999,6 +1022,43 @@ def last_year_left_behind(profit_df: pd.DataFrame,
                   ("vendor name",), ("vendor credit status", "status"))
     cn = _extract(cn_df, "CN", ("credit note date",), ("credit note number",),
                   ("customer name",), ("credit note status", "status"))
+    # Cash Discount: CN-sheet rows whose Account contains 'Cash Discount' — a
+    # SEPARATE table (so CN above naturally excludes them: their Account
+    # parenthetical is the customer, not a reported vertical). Vertical comes from
+    # the shipment's account in Account Transactions.
+    cd = pd.DataFrame(columns=LAST_YEAR_COLS)
+    if cn_df is not None and not getattr(cn_df, "empty", True):
+        _low = {str(c).strip().lower(): c for c in cn_df.columns}
+        def _cc(*names):
+            for n in names:
+                if n.lower() in _low:
+                    return _low[n.lower()]
+            return None
+        _acc = _cc("account"); _ref = _cc("reference#", "referenceno", "reference number", "cf.so number")
+        if _acc is not None and _ref is not None:
+            _m = (cn_df[_acc].astype(str).str.contains("cash discount", case=False, na=False)
+                  & cn_df[_ref].map(_is_left))
+            _stc = _cc("credit note status", "status")
+            if _stc is not None:
+                _m = _m & ~cn_df[_stc].astype(str).str.strip().str.lower().eq("void")
+            _cds = cn_df[_m]
+            if len(_cds):
+                _s2v = _acct_shipment_vertical(acct_txn_df)
+                _dtc, _numc = _cc("credit note date"), _cc("credit note number")
+                _prc, _subc = _cc("customer name"), _cc("subtotal", "amount")
+                _vv = _cds[_ref].astype(str).str.strip().str.upper().map(_s2v)
+                _keep = _vv.notna()
+                _cds, _vv = _cds[_keep.values], _vv[_keep]
+                if len(_cds):
+                    cd = pd.DataFrame({
+                        "Vertical": _vv.values, "Type": "Cash Discount",
+                        "SO Number": _cds[_ref].astype(str).str.strip().values,
+                        "Date": (pd.to_datetime(_cds[_dtc], errors="coerce").dt.strftime("%Y-%m-%d").values
+                                 if _dtc else ""),
+                        "Note Number": (_cds[_numc].astype(str).values if _numc else ""),
+                        "Party": (_cds[_prc].astype(str).values if _prc else ""),
+                        "Amount": (pd.to_numeric(_cds[_subc], errors="coerce").fillna(0.0).values
+                                   if _subc else 0.0)})
     # Logistics: Bill-sheet rows whose Account is 'Marketplace Logistics (...)'
     # and whose shipment isn't in Details → last-year logistics table.
     log = pd.DataFrame(columns=LAST_YEAR_COLS)
@@ -1010,7 +1070,7 @@ def last_year_left_behind(profit_df: pd.DataFrame,
             log = _extract(_logb, "Logistics", ("bill date", "date"),
                            ("bill number", "lr no", "bill no"),
                            ("vendor name", "transporter name"), ("bill status", "status"))
-    out = pd.concat([dn, cn, log], ignore_index=True)
+    out = pd.concat([cn, dn, cd, log], ignore_index=True)
     if out.empty:
         return pd.DataFrame(columns=LAST_YEAR_COLS)
     return out.sort_values(["Vertical", "Type", "SO Number"], ignore_index=True)
@@ -2561,14 +2621,14 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
         except Exception:
             pass    # metrics are additive extras — never block the workbook
 
-        # ── Sheet: Last Year Shipments — CN/DN left behind from Details ──────
-        # Notes (from the MIS CN & DN sheets) whose shipment isn't in the current
-        # Details — last-year shipments still receiving CN/DN. Vertical from each
-        # note's Account column. Per-Vertical×Type subtotals + detail. Data only.
+        # ── Sheet: Last Year Shipments — CN/DN/Cash Discount/Logistics left ──
+        # behind from Details. Per vertical, FOUR tables placed side-by-side, each
+        # with a 3-row summary (Marketplace provision [manual] · Accounted in FY
+        # 2026-27 [Σ Amount] · NO DN value [manual]) then the detail. Vertical from
+        # the note's Account (Cash Discount from the shipment's Account-Txn vertical).
         if cn_df is not None or dn_df is not None or bill_df is not None:
             try:
-                _lb = last_year_left_behind(profit_df, cn_df, dn_df, bill_df)
-                # Per-vertical workbook → only THAT vertical's left-behind notes.
+                _lb = last_year_left_behind(profit_df, cn_df, dn_df, bill_df, acct_txn_df)
                 if vertical and len(_lb):
                     _vt = "".join(c for c in str(vertical).lower() if c.isalnum())
                     def _vmatch(v):
@@ -2579,25 +2639,51 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
                             return vv in ("itad", "itassetsdisposition", "itassets")
                         return vv == _vt
                     _lb = _lb[_lb["Vertical"].map(_vmatch)].reset_index(drop=True)
-                _shn, _r = "Last Year Shipments", 0
+                try:
+                    _inp = _dbm.last_year_inputs_map() if _dbm is not None else {}
+                except Exception:
+                    _inp = {}
+                _shn = "Last Year Shipments"
+                _TBLS = ["CN", "DN", "Cash Discount", "Logistics"]
+                _BW = 7                                   # columns per side-by-side block
+                _party_hdr = {"Logistics": "Vendor Name"}
+                _num_hdr = {"Logistics": "Bill Number"}
                 if len(_lb):
-                    _detcols = ["Type", "SO Number", "Date", "Note Number", "Party", "Amount"]
-                    # one SEPARATE block per vertical: header · its notes · subtotal
+                    _r = 0
                     for _v in sorted(_lb["Vertical"].astype(str).unique()):
-                        _vb = _lb[_lb["Vertical"].astype(str) == _v]
-                        pd.DataFrame([[f"■ {_v}  ({len(_vb)} note(s))"]]).to_excel(
+                        pd.DataFrame([[f"■ {_v}"]]).to_excel(
                             w, sheet_name=_shn, startrow=_r, startcol=0, index=False, header=False)
-                        _headers.append((_shn, _r + 1)); _r += 1
-                        _vb[_detcols].to_excel(w, sheet_name=_shn, startrow=_r, index=False)
-                        _headers.append((_shn, _r + 1)); _r += len(_vb) + 1
-                        pd.DataFrame([["Subtotal", "", "", "", "", round(_vb["Amount"].sum(), 2)]]) \
-                            .to_excel(w, sheet_name=_shn, startrow=_r, startcol=0, index=False, header=False)
-                        _r += 3          # blank row gap before the next vertical
-                    pd.DataFrame([["GRAND TOTAL", "", "", "", "", round(_lb["Amount"].sum(), 2)]]) \
-                        .to_excel(w, sheet_name=_shn, startrow=_r, startcol=0, index=False, header=False)
-                    _headers.append((_shn, _r + 1))
+                        _headers.append((_shn, _r + 1))
+                        _top = _r + 1
+                        _blocklens = []
+                        for _ti, _t in enumerate(_TBLS):
+                            _c0 = _ti * _BW
+                            _tb = _lb[(_lb["Vertical"].astype(str) == _v) & (_lb["Type"] == _t)]
+                            _prov = _inp.get((_v, _t), {}).get("provision", 0.0)
+                            _nodn = _inp.get((_v, _t), {}).get("no_dn", 0.0)
+                            _acct = round(float(_tb["Amount"].sum()), 2) if len(_tb) else 0.0
+                            pd.DataFrame([[_t]]).to_excel(w, sheet_name=_shn, startrow=_top,
+                                                          startcol=_c0, index=False, header=False)
+                            _headers.append((_shn, _top + 1))
+                            pd.DataFrame([["", "Marketplace CN, DN and expense provision", round(_prov, 2)],
+                                          ["", "Accounted in FY 2026-27", _acct],
+                                          ["", "NO DN value", round(_nodn, 2)]],
+                                         columns=["JV Number", "Particulars", "Amount"]) \
+                                .to_excel(w, sheet_name=_shn, startrow=_top + 1, startcol=_c0, index=False)
+                            _headers.append((_shn, _top + 2))
+                            _ds = _top + 1 + 3 + 2                 # gap before detail
+                            _num_h = _num_hdr.get(_t, "CN/DN Number")
+                            _par_h = _party_hdr.get(_t, "Customer Name")
+                            _det = (_tb[["SO Number", "Date", "Note Number", "Party", "Amount"]]
+                                    .rename(columns={"Note Number": _num_h, "Party": _par_h})
+                                    if len(_tb) else
+                                    pd.DataFrame(columns=["SO Number", "Date", _num_h, _par_h, "Amount"]))
+                            _det.to_excel(w, sheet_name=_shn, startrow=_ds, startcol=_c0, index=False)
+                            _headers.append((_shn, _ds + 1))
+                            _blocklens.append((_ds + max(len(_tb), 0) + 1) - _top)
+                        _r = _top + (max(_blocklens) if _blocklens else 1) + 2
                 else:
-                    pd.DataFrame([["No left-behind CN/DN — every note's shipment is in Details."]]) \
+                    pd.DataFrame([["No left-behind CN/DN/Logistics — every shipment is in Details."]]) \
                         .to_excel(w, sheet_name=_shn, startrow=0, startcol=0, index=False, header=False)
                     _headers.append((_shn, 1))
             except Exception:

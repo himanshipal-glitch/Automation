@@ -224,7 +224,7 @@ with st.container(key="rkheader"):
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
         with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.3.4"):
-            st.caption("build: **v3.20.0 — RESTORED the 🗓️ Last Year provisions manual entry box (frontend + DB store) that v3.18.0 removed by mistake — it was only the on-screen PREVIEW you wanted gone. Enter the Marketplace CN/DN & expense provision + NO-DN value per vertical×table; stored figures populate the Last Year sheet's summary with a computed Closing Provision, and any table with nothing stored stays blank with the live Excel formula. v3.19.1 — Manual line items: the 'Matches live?' column is now 'Same as live?' — ticked only when the entry matches a live line AND Apply is unticked (details keep the live line); ticking Apply applies your changes so it's no longer 'same as live'. v3.19.0 — Recy has a new look: a cream pixel-robot (ported from the 'Bolt' widget) that WALKS along the bottom edge, flips to face its direction, waves when you hover it, and flashes its antenna + chest LED while thinking. Recy's knowledge refreshed (editable/AFR provisions, DN provision base = purchase+transport, Account-Transactions receivables, per-line reco, manual line items, Last Year sheet, M4 units, resell keying). v3.18.1 removed the on-screen Last Year Shipments PREVIEW expander from the Summary page (the sheet still builds into every downloaded workbook). v3.18.0 removed the stored Last Year provisions input (frontend expander + DB store); the Last Year sheet now leaves provision/NO-DN cells blank for manual Excel entry, with a live Closing-Provision formula (=provision−accounted−NO-DN). v3.17.0 Last Year sheet matches the manual layout: per vertical, DN·CN·Logistics·Cash Discount side-by-side, each with a 4-row JV summary (opening provision [manual] · Accounted in FY 2026-27 [auto Σ] · NO DN value [manual] · Closing Provision [computed]), a 'Pertaining to FY' label, and per-table detail headers (Logistics = Bill Date/Bill Number/PurchaseOrder/Vendor/Amount). 4 side-by-side tables per vertical (CN excl cash-discount · DN · Cash Discount [CN-sheet 'Cash Discount' accounts, vertical from Account Transactions] · Logistics), each with a 3-row JV summary (Marketplace provision [manual, entered after reco] · Accounted in FY 2026-27 [auto Σ] · NO DN value [manual]). Manual fetch now finds shipments reliably (case/space-insensitive, comma-list & substring match, over current MIS + history, with fallback) — was missing on exact-match. Last Year sheet adds a Logistics Bill table (Marketplace Logistics bills whose shipment isn't in Details, reported verticals only); blank-shipment rows excluded; Cash Discount table pending spec. Manual line items: 🔍 fetch+edit an existing line (overrides it), a Reason box per entry, and an Apply toggle — on each MIS a stored entry matching a live line (Shipment·Invoice·Material) shows 'Matches live?'; Apply replaces the live line with your version, untick keeps live. 'Last Year Shipments' sheet now lists ONLY the reported marketplace verticals (Fare/Boarding/E-Waste/etc. dropped); per-vertical download shows only that vertical. New 'Last Year Shipments' sheet: CN/DN (from the MIS CN & DN sheets) whose shipment isn't in Details for this MIS, vertical read from each note's Account column; per-vertical×type subtotals + detail. Manual line items: 🔍 Fetch an existing shipment's line items from Details, load one into the editor, tweak any column; on Save it REPLACES that computed line (no double-count). Reco review: adds Supplier Name + Vendor Invoice No; decisions now PERSISTED (remembered across MIS uploads); split into 🆕 New MIS shipments vs 📁 Previously stored regions (new→stored on Save); summary gated only while unsaved new shipments exist. Manual line items: each input column shows its expected format (Date YYYY-MM-DD/DD-MM-YYYY, numbers plain, Qty per Qty-Unit) via column tooltips + a format legend. Full raw-input column set (all non-derived Details fields); the engine computes every derived column (Purchase/Amount/Net Qty/Total Cost/Net Revenue/Margins/GST) in real time. Per-row Qty Unit toggle (Display MT/units vs Kg). Stored per-vertical until edited; no auto-provision. Reco review: blank-shipment charge legs (bill + invoice) that match by material are a COMPLETE transaction, so they're dropped from the review (they stay in Details/summary); only genuinely one-sided blank-shipment items remain. DN provision base is now (Purchase Price + Transportation Charges) × rate, not Purchase Price alone (all verticals with a provision). Invoice-line matching keyed by shipment+material+INVOICE NO, so same-shipment/same-material lines on different invoices (e.g. End Generator resell, SH072616016) stay separate instead of being summed. M4 quantity now counts UNITS (like IT AD/Re-Commerce), not MT — fixes M4 FY-total quantity (was collapsing to ~0 via Kg÷1000 vs the frozen unit count). Receivables vertical from the Account Transactions sheet (VLOOKUP transaction_number→entity_number→account_name), prefix logic only as fallback for txns absent there. 8th sheet ingested. IB warehouse/B2B split unchanged. AFR 2.5% provision; editable per-vertical provision %; Reco per-line exclusion.**")
+            st.caption("build: **v3.21.0 — PERFORMANCE: workbook Excel builds are now cached per session (keyed on a content hash of every input + a mtime scan of all persistent stores — a complete key, so a cache hit is byte-identical to a fresh build). Unrelated reruns (ticking a box, typing in the email field, opening an expander) no longer rebuild ~9 workbooks. Also memoized persistent-store disk reads by mtime (the 2.8 MB profit_details + small stores were re-read many times per rerun). No calculation/logic change — only redundant work is skipped. v3.20.0 — RESTORED the 🗓️ Last Year provisions manual entry box (frontend + DB store) that v3.18.0 removed by mistake — it was only the on-screen PREVIEW you wanted gone. Enter the Marketplace CN/DN & expense provision + NO-DN value per vertical×table; stored figures populate the Last Year sheet's summary with a computed Closing Provision, and any table with nothing stored stays blank with the live Excel formula. v3.19.1 — Manual line items: the 'Matches live?' column is now 'Same as live?' — ticked only when the entry matches a live line AND Apply is unticked (details keep the live line); ticking Apply applies your changes so it's no longer 'same as live'. v3.19.0 — Recy has a new look: a cream pixel-robot (ported from the 'Bolt' widget) that WALKS along the bottom edge, flips to face its direction, waves when you hover it, and flashes its antenna + chest LED while thinking. Recy's knowledge refreshed (editable/AFR provisions, DN provision base = purchase+transport, Account-Transactions receivables, per-line reco, manual line items, Last Year sheet, M4 units, resell keying). v3.18.1 removed the on-screen Last Year Shipments PREVIEW expander from the Summary page (the sheet still builds into every downloaded workbook). v3.18.0 removed the stored Last Year provisions input (frontend expander + DB store); the Last Year sheet now leaves provision/NO-DN cells blank for manual Excel entry, with a live Closing-Provision formula (=provision−accounted−NO-DN). v3.17.0 Last Year sheet matches the manual layout: per vertical, DN·CN·Logistics·Cash Discount side-by-side, each with a 4-row JV summary (opening provision [manual] · Accounted in FY 2026-27 [auto Σ] · NO DN value [manual] · Closing Provision [computed]), a 'Pertaining to FY' label, and per-table detail headers (Logistics = Bill Date/Bill Number/PurchaseOrder/Vendor/Amount). 4 side-by-side tables per vertical (CN excl cash-discount · DN · Cash Discount [CN-sheet 'Cash Discount' accounts, vertical from Account Transactions] · Logistics), each with a 3-row JV summary (Marketplace provision [manual, entered after reco] · Accounted in FY 2026-27 [auto Σ] · NO DN value [manual]). Manual fetch now finds shipments reliably (case/space-insensitive, comma-list & substring match, over current MIS + history, with fallback) — was missing on exact-match. Last Year sheet adds a Logistics Bill table (Marketplace Logistics bills whose shipment isn't in Details, reported verticals only); blank-shipment rows excluded; Cash Discount table pending spec. Manual line items: 🔍 fetch+edit an existing line (overrides it), a Reason box per entry, and an Apply toggle — on each MIS a stored entry matching a live line (Shipment·Invoice·Material) shows 'Matches live?'; Apply replaces the live line with your version, untick keeps live. 'Last Year Shipments' sheet now lists ONLY the reported marketplace verticals (Fare/Boarding/E-Waste/etc. dropped); per-vertical download shows only that vertical. New 'Last Year Shipments' sheet: CN/DN (from the MIS CN & DN sheets) whose shipment isn't in Details for this MIS, vertical read from each note's Account column; per-vertical×type subtotals + detail. Manual line items: 🔍 Fetch an existing shipment's line items from Details, load one into the editor, tweak any column; on Save it REPLACES that computed line (no double-count). Reco review: adds Supplier Name + Vendor Invoice No; decisions now PERSISTED (remembered across MIS uploads); split into 🆕 New MIS shipments vs 📁 Previously stored regions (new→stored on Save); summary gated only while unsaved new shipments exist. Manual line items: each input column shows its expected format (Date YYYY-MM-DD/DD-MM-YYYY, numbers plain, Qty per Qty-Unit) via column tooltips + a format legend. Full raw-input column set (all non-derived Details fields); the engine computes every derived column (Purchase/Amount/Net Qty/Total Cost/Net Revenue/Margins/GST) in real time. Per-row Qty Unit toggle (Display MT/units vs Kg). Stored per-vertical until edited; no auto-provision. Reco review: blank-shipment charge legs (bill + invoice) that match by material are a COMPLETE transaction, so they're dropped from the review (they stay in Details/summary); only genuinely one-sided blank-shipment items remain. DN provision base is now (Purchase Price + Transportation Charges) × rate, not Purchase Price alone (all verticals with a provision). Invoice-line matching keyed by shipment+material+INVOICE NO, so same-shipment/same-material lines on different invoices (e.g. End Generator resell, SH072616016) stay separate instead of being summed. M4 quantity now counts UNITS (like IT AD/Re-Commerce), not MT — fixes M4 FY-total quantity (was collapsing to ~0 via Kg÷1000 vs the frozen unit count). Receivables vertical from the Account Transactions sheet (VLOOKUP transaction_number→entity_number→account_name), prefix logic only as fallback for txns absent there. 8th sheet ingested. IB warehouse/B2B split unchanged. AFR 2.5% provision; editable per-vertical provision %; Reco per-line exclusion.**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())
@@ -653,6 +653,68 @@ def _auto_pipeline():
             # month's rows would otherwise vanish from later uploads. Upsert by
             # shipment+invoice: late CN/DN updates replace the old version.
             db.upsert_profit_details(profit)
+
+
+# ── Workbook-build cache (perf) ───────────────────────────────────────────────
+# reports.combined_workbook is the dominant per-rerun cost: it's called ~9× per
+# Summary rerun (per vertical + the All/variant builds), and each generates a
+# multi-sheet openpyxl workbook. It is a PURE function of its explicit args plus
+# the files it reads (all under persistent/, via database). So we cache the built
+# bytes keyed on a content hash of every arg + an mtime/size scan of the whole
+# persistent dir. That key is COMPLETE — a cache hit is byte-identical to a fresh
+# build — so unrelated reruns (ticking a box, typing in the email field, opening
+# an expander) reuse the bytes instead of rebuilding. Output is never changed;
+# only redundant rebuilds are skipped.
+import hashlib as _hashlib
+
+
+def _wb_hash_into(o, h, memo):
+    """Feed an object's CONTENT into hasher h. DataFrames are hashed by value +
+    column names, memoized by id() in `memo` (a fresh dict per rerun) so the same
+    frame passed to all ~9 builds is hashed only once. Deterministic and
+    content-based — no ids/addresses leak into the digest."""
+    if isinstance(o, pd.DataFrame):
+        oid = id(o)
+        d = memo.get(oid)
+        if d is None:
+            hh = _hashlib.blake2b(digest_size=16)
+            try:
+                hh.update(pd.util.hash_pandas_object(o, index=True).values.tobytes())
+            except Exception:
+                hh.update(pd.util.hash_pandas_object(o.astype(str), index=True).values.tobytes())
+            hh.update(repr(list(o.columns)).encode())
+            d = hh.digest()
+            memo[oid] = d
+        h.update(b"DF"); h.update(d)
+    elif isinstance(o, dict):
+        h.update(b"D{")
+        for k in sorted(o.keys(), key=lambda x: str(x)):
+            h.update(str(k).encode()); _wb_hash_into(o[k], h, memo)
+        h.update(b"}")
+    elif isinstance(o, (set, frozenset)):
+        h.update(b"S{")
+        for k in sorted(o, key=lambda x: str(x)):
+            _wb_hash_into(k, h, memo)
+        h.update(b"}")
+    elif isinstance(o, (list, tuple)):
+        h.update(b"[")
+        for k in o:
+            _wb_hash_into(k, h, memo)
+        h.update(b"]")
+    elif o is None:
+        h.update(b"None")
+    else:
+        h.update(repr(o).encode())
+
+
+def _persist_sig():
+    """(name, mtime_ns, size) for every file in persistent/ — captures every store
+    combined_workbook might read internally, so any store change busts the key."""
+    try:
+        return tuple(sorted((p.name, p.stat().st_mtime_ns, p.stat().st_size)
+                            for p in db.PERSIST_DIR.glob("*") if p.is_file()))
+    except Exception:
+        return ()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2012,6 +2074,29 @@ elif page == "Summary Report":
         summaries = _build(_sel_pdf)
         st.session_state["_recy_summaries"] = summaries
 
+        # Cached workbook builder — reuse bytes across reruns when nothing that
+        # feeds combined_workbook changed (see _wb_hash_into / _persist_sig).
+        _wb_hmemo: dict = {}                                   # per-rerun frame-hash memo
+        _wb_bytes_cache = st.session_state.setdefault("_wb_cache", {})
+
+        def _cwb(summaries, profit_df, ar_df=None, ap_df=None, **kw):
+            # accept the 4 leading args positionally (as the call sites pass them),
+            # then key on the FULL kwarg set + persistent-store signature.
+            kw.update(summaries=summaries, profit_df=profit_df, ar_df=ar_df, ap_df=ap_df)
+            _h = _hashlib.blake2b(digest_size=16)
+            for _k in sorted(kw):
+                _h.update(_k.encode()); _wb_hash_into(kw[_k], _h, _wb_hmemo)
+            _wb_hash_into(_persist_sig(), _h, _wb_hmemo)
+            _key = _h.hexdigest()
+            _hit = _wb_bytes_cache.get(_key)
+            if _hit is not None:
+                return _hit
+            _wbb = reports.combined_workbook(**kw)
+            _wb_bytes_cache[_key] = _wbb
+            while len(_wb_bytes_cache) > 16:                   # bounded LRU-ish
+                _wb_bytes_cache.pop(next(iter(_wb_bytes_cache)), None)
+            return _wbb
+
         # ── Re-Commerce (Without Samsung) — ADDITIVE view ────────────────────
         # Same pipeline over the same data, minus RC rows whose VENDOR starts
         # with 'Samsung'. Closed months freeze to the signed-off figures in
@@ -2064,7 +2149,7 @@ elif page == "Summary Report":
                 safe = name.replace("(", "_").replace(")", "").replace("/", "-").replace(" ", "_")
                 if name != "All Categories":
                     try:
-                        _wb_v = reports.combined_workbook(
+                        _wb_v = _cwb(
                             summaries, _sel_pdf, _ar, _ap, vertical=name, reco_ships=reco_ships,
                             rc_ns_summary=_rc_ns if name == "Re-Commerce" else None,
                             op_cost_bills=_obills, acct_txn_df=_atxn, cn_df=_cn, dn_df=_dn, bill_df=_bill)
@@ -2097,9 +2182,9 @@ elif page == "Summary Report":
                                          else "_" + _lbl.lower().replace(" ", "_")) + ".xlsx"
             try:
                 _s = summaries if _lbl == _sel else _build(_pdf)
-                _wb_all = reports.combined_workbook(_s, _pdf, _ar, _ap, reco_ships=reco_ships,
-                                                    rc_ns_summary=_rc_ns, op_cost_bills=_obills,
-                                                    acct_txn_df=_atxn, cn_df=_cn, dn_df=_dn, bill_df=_bill)
+                _wb_all = _cwb(_s, _pdf, _ar, _ap, reco_ships=reco_ships,
+                               rc_ns_summary=_rc_ns, op_cost_bills=_obills,
+                               acct_txn_df=_atxn, cn_df=_cn, dn_df=_dn, bill_df=_bill)
                 st.download_button(
                     f"⬇ Download ALL Verticals{_sfx} (Excel — Summary · Receivables · Payables · Report)",
                     _wb_all, file_name=_fn,
@@ -2165,9 +2250,9 @@ elif page == "Summary Report":
                     for _v in _s.keys():
                         if _v == "All Categories":
                             continue
-                        _wb = reports.combined_workbook(_s, _pdf, _ar, _ap, vertical=_v, reco_ships=reco_ships,
-                                                        rc_ns_summary=_rc_ns if _v == "Re-Commerce" else None,
-                                                        op_cost_bills=_obills, acct_txn_df=_atxn, cn_df=_cn, dn_df=_dn, bill_df=_bill)
+                        _wb = _cwb(_s, _pdf, _ar, _ap, vertical=_v, reco_ships=reco_ships,
+                                   rc_ns_summary=_rc_ns if _v == "Re-Commerce" else None,
+                                   op_cost_bills=_obills, acct_txn_df=_atxn, cn_df=_cn, dn_df=_dn, bill_df=_bill)
                         _rcpts = only_to or _rbv.get(_v, _base_to)
                         _safe = _v.replace("(", "_").replace(")", "").replace("/", "-").replace(" ", "_")
                         _vbody = _body.replace("Profitability Report", f"Profitability Report - {_v}")
@@ -2177,9 +2262,9 @@ elif page == "Summary Report":
                             html=_mail_html(_s, _v, _vbody))
                         results.append(f"{'✅' if _ok else '❌'} {_v}{_vsfx}: {_msg}")
                 else:
-                    _wb = reports.combined_workbook(_s, _pdf, _ar, _ap, reco_ships=reco_ships,
-                                                    rc_ns_summary=_rc_ns, op_cost_bills=_obills,
-                                                    acct_txn_df=_atxn, cn_df=_cn, dn_df=_dn, bill_df=_bill)
+                    _wb = _cwb(_s, _pdf, _ar, _ap, reco_ships=reco_ships,
+                               rc_ns_summary=_rc_ns, op_cost_bills=_obills,
+                               acct_txn_df=_atxn, cn_df=_cn, dn_df=_dn, bill_df=_bill)
                     _ok, _msg = _mailer.send_report(
                         only_to or _base_to, f"{_subj}{_vsfx}", _body, _wb,
                         f"profitability_all{_fsfx}.xlsx", _cfg,

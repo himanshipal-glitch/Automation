@@ -1652,36 +1652,40 @@ elif page == "Summary Report":
         # ── Last Year provisions — manual inputs (after Reco, before summary) ─
         # Per (Vertical, Table) figures for the Last Year sheet's 3-row summary:
         # the Marketplace CN/DN & expense provision, and the NO-DN value.
-        _ly_store = db.load_last_year_inputs()
-        with st.expander(f"🗓️ Last Year provisions — {len(_ly_store)} stored "
-                         "(CN / DN / Cash Discount / Logistics per vertical)"):
-            st.caption("For each **vertical × table** in the **Last Year Shipments** sheet, enter "
-                       "the **Marketplace CN, DN & expense provision** and the **NO DN value**. "
-                       "'Accounted in FY 2026-27' is computed automatically (Σ of that table's "
-                       "Amount). Stored until changed — enter these before relying on the "
-                       "summary/details.")
-            st.caption(_durability_note)
-            _ly_seed = _ly_store if not _ly_store.empty else pd.DataFrame(
-                {"Vertical": pd.Series(dtype="str"), "Table": pd.Series(dtype="str"),
-                 "Provision": pd.Series(dtype="float"), "NO DN Value": pd.Series(dtype="float")})
-            _ly_res = st.data_editor(
-                _ly_seed, num_rows="dynamic", use_container_width=True, key="ly_editor",
-                column_config={
-                    "Vertical": st.column_config.SelectboxColumn(
-                        "Vertical", options=reports.MANUAL_VERTICAL_OPTIONS, required=True),
-                    "Table": st.column_config.SelectboxColumn(
-                        "Table", options=db.LAST_YEAR_TABLES, required=True),
-                    "Provision": st.column_config.NumberColumn(
-                        "Marketplace CN/DN & expense provision"),
-                    "NO DN Value": st.column_config.NumberColumn("NO DN value"),
-                })
-            _lym = st.session_state.pop("ly_save_msg", None)
-            if _lym:
-                (st.warning if "⚠" in _lym else st.success)(_lym)
-            if st.button("💾 Save Last Year provisions", key="ly_save"):
-                _n = db.save_last_year_inputs(_ly_res)
-                st.session_state["ly_save_msg"] = _save_feedback(_n, "Last Year provision row(s)")
-                st.rerun()
+        # Guarded so a mid-redeploy stale `database` module can't crash the page.
+        if not hasattr(db, "load_last_year_inputs"):
+            st.info("🗓️ Last Year provisions input loads after the app finishes redeploying "
+                    "— if it doesn't appear, **reboot the app** (Manage app → Reboot).")
+        else:
+            _ly_store = db.load_last_year_inputs()
+            with st.expander(f"🗓️ Last Year provisions — {len(_ly_store)} stored "
+                             "(CN / DN / Cash Discount / Logistics per vertical)"):
+                st.caption("For each **vertical × table** in the **Last Year Shipments** sheet, "
+                           "enter the **Marketplace CN, DN & expense provision** and the **NO DN "
+                           "value**. 'Accounted in FY 2026-27' is computed automatically (Σ of "
+                           "that table's Amount). Stored until changed.")
+                st.caption(_durability_note)
+                _ly_seed = _ly_store if not _ly_store.empty else pd.DataFrame(
+                    {"Vertical": pd.Series(dtype="str"), "Table": pd.Series(dtype="str"),
+                     "Provision": pd.Series(dtype="float"), "NO DN Value": pd.Series(dtype="float")})
+                _ly_res = st.data_editor(
+                    _ly_seed, num_rows="dynamic", use_container_width=True, key="ly_editor",
+                    column_config={
+                        "Vertical": st.column_config.SelectboxColumn(
+                            "Vertical", options=reports.MANUAL_VERTICAL_OPTIONS, required=True),
+                        "Table": st.column_config.SelectboxColumn(
+                            "Table", options=db.LAST_YEAR_TABLES, required=True),
+                        "Provision": st.column_config.NumberColumn(
+                            "Marketplace CN/DN & expense provision"),
+                        "NO DN Value": st.column_config.NumberColumn("NO DN value"),
+                    })
+                _lym = st.session_state.pop("ly_save_msg", None)
+                if _lym:
+                    (st.warning if "⚠" in _lym else st.success)(_lym)
+                if st.button("💾 Save Last Year provisions", key="ly_save"):
+                    _n = db.save_last_year_inputs(_ly_res)
+                    st.session_state["ly_save_msg"] = _save_feedback(_n, "Last Year provision row(s)")
+                    st.rerun()
 
         # ── ENTERPRISE manual inputs (after Reco review) ────────────────────
         # 1) Custom Duty bills: shipments with NO bill/invoice side in Zoho,

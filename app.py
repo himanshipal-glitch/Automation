@@ -224,7 +224,7 @@ with st.container(key="rkheader"):
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
         with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.3.4"):
-            st.caption("build: **v3.18.0 — removed the stored Last Year provisions input (frontend expander + DB store); the Last Year sheet now leaves provision/NO-DN cells blank for manual Excel entry, with a live Closing-Provision formula (=provision−accounted−NO-DN). v3.17.0 Last Year sheet matches the manual layout: per vertical, DN·CN·Logistics·Cash Discount side-by-side, each with a 4-row JV summary (opening provision [manual] · Accounted in FY 2026-27 [auto Σ] · NO DN value [manual] · Closing Provision [computed]), a 'Pertaining to FY' label, and per-table detail headers (Logistics = Bill Date/Bill Number/PurchaseOrder/Vendor/Amount). 4 side-by-side tables per vertical (CN excl cash-discount · DN · Cash Discount [CN-sheet 'Cash Discount' accounts, vertical from Account Transactions] · Logistics), each with a 3-row JV summary (Marketplace provision [manual, entered after reco] · Accounted in FY 2026-27 [auto Σ] · NO DN value [manual]). Manual fetch now finds shipments reliably (case/space-insensitive, comma-list & substring match, over current MIS + history, with fallback) — was missing on exact-match. Last Year sheet adds a Logistics Bill table (Marketplace Logistics bills whose shipment isn't in Details, reported verticals only); blank-shipment rows excluded; Cash Discount table pending spec. Manual line items: 🔍 fetch+edit an existing line (overrides it), a Reason box per entry, and an Apply toggle — on each MIS a stored entry matching a live line (Shipment·Invoice·Material) shows 'Matches live?'; Apply replaces the live line with your version, untick keeps live. 'Last Year Shipments' sheet now lists ONLY the reported marketplace verticals (Fare/Boarding/E-Waste/etc. dropped); per-vertical download shows only that vertical. New 'Last Year Shipments' sheet: CN/DN (from the MIS CN & DN sheets) whose shipment isn't in Details for this MIS, vertical read from each note's Account column; per-vertical×type subtotals + detail. Manual line items: 🔍 Fetch an existing shipment's line items from Details, load one into the editor, tweak any column; on Save it REPLACES that computed line (no double-count). Reco review: adds Supplier Name + Vendor Invoice No; decisions now PERSISTED (remembered across MIS uploads); split into 🆕 New MIS shipments vs 📁 Previously stored regions (new→stored on Save); summary gated only while unsaved new shipments exist. Manual line items: each input column shows its expected format (Date YYYY-MM-DD/DD-MM-YYYY, numbers plain, Qty per Qty-Unit) via column tooltips + a format legend. Full raw-input column set (all non-derived Details fields); the engine computes every derived column (Purchase/Amount/Net Qty/Total Cost/Net Revenue/Margins/GST) in real time. Per-row Qty Unit toggle (Display MT/units vs Kg). Stored per-vertical until edited; no auto-provision. Reco review: blank-shipment charge legs (bill + invoice) that match by material are a COMPLETE transaction, so they're dropped from the review (they stay in Details/summary); only genuinely one-sided blank-shipment items remain. DN provision base is now (Purchase Price + Transportation Charges) × rate, not Purchase Price alone (all verticals with a provision). Invoice-line matching keyed by shipment+material+INVOICE NO, so same-shipment/same-material lines on different invoices (e.g. End Generator resell, SH072616016) stay separate instead of being summed. M4 quantity now counts UNITS (like IT AD/Re-Commerce), not MT — fixes M4 FY-total quantity (was collapsing to ~0 via Kg÷1000 vs the frozen unit count). Receivables vertical from the Account Transactions sheet (VLOOKUP transaction_number→entity_number→account_name), prefix logic only as fallback for txns absent there. 8th sheet ingested. IB warehouse/B2B split unchanged. AFR 2.5% provision; editable per-vertical provision %; Reco per-line exclusion.**")
+            st.caption("build: **v3.19.1 — Manual line items: the 'Matches live?' column is now 'Same as live?' — ticked only when the entry matches a live line AND Apply is unticked (details keep the live line); ticking Apply applies your changes so it's no longer 'same as live'. v3.19.0 — Recy has a new look: a cream pixel-robot (ported from the 'Bolt' widget) that WALKS along the bottom edge, flips to face its direction, waves when you hover it, and flashes its antenna + chest LED while thinking. Recy's knowledge refreshed (editable/AFR provisions, DN provision base = purchase+transport, Account-Transactions receivables, per-line reco, manual line items, Last Year sheet, M4 units, resell keying). v3.18.1 removed the on-screen Last Year Shipments PREVIEW expander from the Summary page (the sheet still builds into every downloaded workbook). v3.18.0 removed the stored Last Year provisions input (frontend expander + DB store); the Last Year sheet now leaves provision/NO-DN cells blank for manual Excel entry, with a live Closing-Provision formula (=provision−accounted−NO-DN). v3.17.0 Last Year sheet matches the manual layout: per vertical, DN·CN·Logistics·Cash Discount side-by-side, each with a 4-row JV summary (opening provision [manual] · Accounted in FY 2026-27 [auto Σ] · NO DN value [manual] · Closing Provision [computed]), a 'Pertaining to FY' label, and per-table detail headers (Logistics = Bill Date/Bill Number/PurchaseOrder/Vendor/Amount). 4 side-by-side tables per vertical (CN excl cash-discount · DN · Cash Discount [CN-sheet 'Cash Discount' accounts, vertical from Account Transactions] · Logistics), each with a 3-row JV summary (Marketplace provision [manual, entered after reco] · Accounted in FY 2026-27 [auto Σ] · NO DN value [manual]). Manual fetch now finds shipments reliably (case/space-insensitive, comma-list & substring match, over current MIS + history, with fallback) — was missing on exact-match. Last Year sheet adds a Logistics Bill table (Marketplace Logistics bills whose shipment isn't in Details, reported verticals only); blank-shipment rows excluded; Cash Discount table pending spec. Manual line items: 🔍 fetch+edit an existing line (overrides it), a Reason box per entry, and an Apply toggle — on each MIS a stored entry matching a live line (Shipment·Invoice·Material) shows 'Matches live?'; Apply replaces the live line with your version, untick keeps live. 'Last Year Shipments' sheet now lists ONLY the reported marketplace verticals (Fare/Boarding/E-Waste/etc. dropped); per-vertical download shows only that vertical. New 'Last Year Shipments' sheet: CN/DN (from the MIS CN & DN sheets) whose shipment isn't in Details for this MIS, vertical read from each note's Account column; per-vertical×type subtotals + detail. Manual line items: 🔍 Fetch an existing shipment's line items from Details, load one into the editor, tweak any column; on Save it REPLACES that computed line (no double-count). Reco review: adds Supplier Name + Vendor Invoice No; decisions now PERSISTED (remembered across MIS uploads); split into 🆕 New MIS shipments vs 📁 Previously stored regions (new→stored on Save); summary gated only while unsaved new shipments exist. Manual line items: each input column shows its expected format (Date YYYY-MM-DD/DD-MM-YYYY, numbers plain, Qty per Qty-Unit) via column tooltips + a format legend. Full raw-input column set (all non-derived Details fields); the engine computes every derived column (Purchase/Amount/Net Qty/Total Cost/Net Revenue/Margins/GST) in real time. Per-row Qty Unit toggle (Display MT/units vs Kg). Stored per-vertical until edited; no auto-provision. Reco review: blank-shipment charge legs (bill + invoice) that match by material are a COMPLETE transaction, so they're dropped from the review (they stay in Details/summary); only genuinely one-sided blank-shipment items remain. DN provision base is now (Purchase Price + Transportation Charges) × rate, not Purchase Price alone (all verticals with a provision). Invoice-line matching keyed by shipment+material+INVOICE NO, so same-shipment/same-material lines on different invoices (e.g. End Generator resell, SH072616016) stay separate instead of being summed. M4 quantity now counts UNITS (like IT AD/Re-Commerce), not MT — fixes M4 FY-total quantity (was collapsing to ~0 via Kg÷1000 vs the frozen unit count). Receivables vertical from the Account Transactions sheet (VLOOKUP transaction_number→entity_number→account_name), prefix logic only as fallback for txns absent there. 8th sheet ingested. IB warehouse/B2B split unchanged. AFR 2.5% provision; editable per-vertical provision %; Reco per-line exclusion.**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())
@@ -319,68 +319,134 @@ with _recy_pop:
             if _ok:
                 st.caption("A human reviews & merges it — nothing changes automatically.")
 
-# Fix the popover trigger as an invisible 56px hotspot; robot SVG drawn over it.
+# Fix the popover trigger as an invisible hotspot the size of the robot; the
+# pixel-robot SVG is drawn over it, so clicking the robot opens the chat.
+# The robot look + motion is a port of the "Bolt" wandering-pixel-robot widget
+# (README/BoltWidget.jsx): a cream pixel bot that walks the bottom edge, waves on
+# hover, and flashes its antenna/chest LED while thinking. Class prefix "pp-".
 st.markdown("""
 <style>
-[data-testid="stPopover"]{position:fixed !important;bottom:26px;right:26px;z-index:100000;width:56px;}
-[data-testid="stPopover"] button{width:56px;height:56px;border-radius:50%;
+[data-testid="stPopover"]{position:fixed !important;bottom:14px;right:26px;z-index:100000;width:56px;}
+[data-testid="stPopover"] button{width:56px;height:70px;border-radius:12px;
    background:transparent !important;border:none !important;color:transparent !important;
    box-shadow:none !important;}
-@keyframes recybob{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+
+/* idle bob */
+@keyframes pp-bob { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-2.5px)} }
+/* blink — quick squish of the bracket eyes */
+@keyframes pp-blink { 0%,91%,100%{transform:scaleY(1)} 94%{transform:scaleY(0.12)} }
+/* antenna sway */
+@keyframes pp-sway { 0%,100%{transform:rotate(-5deg)} 50%{transform:rotate(5deg)} }
+/* antenna tip / chest flash while thinking */
+@keyframes pp-tip-flash { 0%,100%{fill:#F5B818} 50%{fill:#FFE28A} }
+/* walking — legs alternate, body bounces, arms swing */
+@keyframes pp-step-l { 0%,100%{transform:rotate(14deg)} 50%{transform:rotate(-14deg)} }
+@keyframes pp-step-r { 0%,100%{transform:rotate(-14deg)} 50%{transform:rotate(14deg)} }
+@keyframes pp-walk-bounce { 0%,100%{transform:translateY(0)} 25%,75%{transform:translateY(-1.6px)} }
+@keyframes pp-arm-swing-l { 0%,100%{transform:rotate(-12deg)} 50%{transform:rotate(12deg)} }
+@keyframes pp-arm-swing-r { 0%,100%{transform:rotate(12deg)} 50%{transform:rotate(-12deg)} }
+/* wave — one arm swings big, head tilts */
+@keyframes pp-wave { 0%,100%{transform:rotate(0)} 25%{transform:rotate(-48deg)} 50%{transform:rotate(-10deg)} 75%{transform:rotate(-40deg)} }
+@keyframes pp-tilt { 0%,100%{transform:rotate(0)} 50%{transform:rotate(-5deg)} }
+/* thinking — antenna wobbles fast */
+@keyframes pp-think-sway { 0%,100%{transform:rotate(-12deg)} 50%{transform:rotate(12deg)} }
+
+.pp-toy{ display:inline-block; }
+.pp-toy svg{ display:block; }
+.pp-toy{ animation:pp-bob 3s ease-in-out infinite; }
+.pp-toy .pp-eyes   { transform-origin:32px 25px; animation:pp-blink 4.8s ease-in-out infinite; }
+.pp-toy .pp-antenna{ transform-origin:32px 13px; animation:pp-sway 3.6s ease-in-out infinite; }
+.pp-toy .pp-arm { transform-origin:50% 44px; }
+.pp-toy .pp-leg { transform-origin:50% 66px; }
+.pp-toy .pp-head{ transform-origin:32px 30px; }
+
+/* walk */
+.pp-mood-walk{ animation:pp-walk-bounce 0.45s linear infinite !important; }
+.pp-mood-walk .pp-leg-l{ animation:pp-step-l 0.45s linear infinite; }
+.pp-mood-walk .pp-leg-r{ animation:pp-step-r 0.45s linear infinite; }
+.pp-mood-walk .pp-arm-l{ animation:pp-arm-swing-l 0.45s linear infinite; }
+.pp-mood-walk .pp-arm-r{ animation:pp-arm-swing-r 0.45s linear infinite; }
+/* wave */
+.pp-mood-wave .pp-arm-r{ animation:pp-wave 1.3s ease-in-out; }
+.pp-mood-wave .pp-head { animation:pp-tilt 1.3s ease-in-out; }
+/* think */
+.pp-mood-think .pp-antenna    { animation:pp-think-sway 0.7s ease-in-out infinite !important; }
+.pp-mood-think .pp-antenna-tip{ animation:pp-tip-flash 0.7s ease-in-out infinite; }
+.pp-mood-think .pp-chest-led  { animation:pp-tip-flash 0.7s ease-in-out infinite; }
 </style>
 """, unsafe_allow_html=True)
 
 st.markdown(
     f"""
-<div style="position:fixed;bottom:22px;right:26px;z-index:100001;
+<div id="recy-outer" style="position:fixed;bottom:14px;right:26px;z-index:100001;
             display:flex;align-items:flex-end;gap:6px;pointer-events:none;">
-  <div id="recy-bubble" style="max-width:210px;background:#16160F;color:#fff;padding:8px 11px;
-              border-radius:12px 12px 2px 12px;font-size:11.5px;line-height:1.35;margin-bottom:6px;
+  <div id="recy-bubble" style="max-width:210px;background:#232A33;color:#fff;padding:8px 11px;
+              border-radius:12px 12px 2px 12px;font-size:11.5px;line-height:1.35;margin-bottom:8px;
               box-shadow:0 4px 12px rgba(0,0,0,.22);transition:all .15s;">{_RECY_QUIPS.get(page, "Hey, I'm Recy 🤖 — click me!")}</div>
-  <div id="recy-bot" style="position:relative;filter:drop-shadow(0 3px 5px rgba(0,0,0,.28));animation:recybob 2.6s ease-in-out infinite;">
-    <svg width="46" height="50" viewBox="0 0 46 50" xmlns="http://www.w3.org/2000/svg">
-      <line x1="23" y1="3" x2="23" y2="12" stroke="#16160F" stroke-width="2.4"/>
-      <circle id="recy-antenna" cx="23" cy="3.5" r="3.2" fill="#12b866" style="transition:fill .3s ease;"/>
-      <rect x="3" y="21" width="4.5" height="12" rx="2.2" fill="#16160F"/>
-      <rect x="38.5" y="21" width="4.5" height="12" rx="2.2" fill="#16160F"/>
-      <rect x="6" y="12" width="34" height="28" rx="9" fill="#ffffff" stroke="#16160F" stroke-width="2.6"/>
-      <rect x="11" y="18" width="24" height="15" rx="6" fill="#F2F2EE"/>
-      <!-- eyebrows (curious) -->
-      <g id="recy-acc-brows" style="opacity:0;transition:opacity .25s ease;">
-        <line x1="14.5" y1="21" x2="20" y2="21.4" stroke="#16160F" stroke-width="1.5" stroke-linecap="round"/>
-        <line x1="26" y1="19.8" x2="31.5" y2="21.6" stroke="#16160F" stroke-width="1.5" stroke-linecap="round"/>
-      </g>
-      <!-- the eyes (hidden behind glasses / heart-eyes) -->
-      <g id="recy-eyes" style="transition:opacity .2s ease;">
-        <circle id="recy-eye-l" cx="17.5" cy="25.5" r="3.3" fill="#16160F" style="transform-box:fill-box;transform-origin:center;transition:transform .16s ease-out;"/>
-        <circle id="recy-eye-r" cx="28.5" cy="25.5" r="3.3" fill="#16160F" style="transform-box:fill-box;transform-origin:center;transition:transform .16s ease-out;"/>
-      </g>
-      <!-- sunglasses (cool) -->
-      <g id="recy-acc-glasses" style="opacity:0;transition:opacity .25s ease;">
-        <rect x="12.8" y="22.2" width="8.6" height="6.4" rx="3.1" fill="#16160F"/>
-        <rect x="24.6" y="22.2" width="8.6" height="6.4" rx="3.1" fill="#16160F"/>
-        <rect x="21.2" y="24.3" width="3.6" height="1.6" fill="#16160F"/>
-        <line x1="7.5" y1="24" x2="12.8" y2="24.6" stroke="#16160F" stroke-width="1.4"/>
-        <line x1="33.2" y1="24.6" x2="38.5" y2="24" stroke="#16160F" stroke-width="1.4"/>
-        <line x1="14.5" y1="24" x2="18.5" y2="24" stroke="#D6D5D0" stroke-width="1" stroke-linecap="round" opacity=".7"/>
-        <line x1="26.5" y1="24" x2="30.5" y2="24" stroke="#D6D5D0" stroke-width="1" stroke-linecap="round" opacity=".7"/>
-      </g>
-      <path id="recy-mouth" d="M18 30.5 Q23 34 28 30.5" stroke="#16160F" stroke-width="2" fill="none" stroke-linecap="round" style="transition:d .28s ease;"/>
-      <circle cx="12.5" cy="30" r="1.8" fill="#D6D5D0"/>
-      <circle cx="33.5" cy="30" r="1.8" fill="#D6D5D0"/>
-      <!-- sweat drop (alert) -->
-      <g id="recy-acc-sweat" fill="#4fa3ff" style="opacity:0;transition:opacity .25s ease;">
-        <path transform="translate(35 14.5)" d="M0 0 C2.2 3 2.2 5.2 0 5.2 C-2.2 5.2 -2.2 3 0 0 Z"/>
-      </g>
-      <!-- sparkles (celebrate) -->
-      <g id="recy-acc-sparkles" fill="#f4b400" style="opacity:0;transition:opacity .25s ease;">
-        <path transform="translate(9 15)"        d="M0 -2.6 L0.7 -0.7 L2.6 0 L0.7 0.7 L0 2.6 L-0.7 0.7 L-2.6 0 L-0.7 -0.7 Z"/>
-        <path transform="translate(37 14) scale(.8)" d="M0 -2.6 L0.7 -0.7 L2.6 0 L0.7 0.7 L0 2.6 L-0.7 0.7 L-2.6 0 L-0.7 -0.7 Z"/>
-        <path transform="translate(38 34) scale(.9)" d="M0 -2.6 L0.7 -0.7 L2.6 0 L0.7 0.7 L0 2.6 L-0.7 0.7 L-2.6 0 L-0.7 -0.7 Z"/>
-        <path transform="translate(8 35) scale(.7)"  d="M0 -2.6 L0.7 -0.7 L2.6 0 L0.7 0.7 L0 2.6 L-0.7 0.7 L-2.6 0 L-0.7 -0.7 Z"/>
-      </g>
-      <rect x="15" y="40" width="16" height="6" rx="3" fill="#16160F"/>
-    </svg>
+  <div id="recy-flip" style="transition:transform .15s ease;">
+    <div id="recy-bot" class="pp-toy pp-mood-idle" style="width:54px;height:68px;filter:drop-shadow(0 3px 5px rgba(0,0,0,.28));">
+      <svg viewBox="0 0 64 80" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%;overflow:visible;" shape-rendering="crispEdges">
+        <ellipse class="pp-shadow" cx="32" cy="78" rx="16" ry="2.4" fill="#000" opacity="0.14"/>
+        <!-- antenna -->
+        <g class="pp-antenna">
+          <rect x="31" y="3" width="2.4" height="10" fill="#232A33"/>
+          <rect class="pp-antenna-tip" x="29.2" y="0" width="6" height="4.6" rx="1" fill="#F5B818" stroke="#232A33" stroke-width="1"/>
+        </g>
+        <!-- ears -->
+        <rect x="7.5" y="19" width="5" height="11" rx="1.5" fill="#39424E" stroke="#232A33" stroke-width="1.2"/>
+        <rect x="51.5" y="19" width="5" height="11" rx="1.5" fill="#39424E" stroke="#232A33" stroke-width="1.2"/>
+        <!-- head -->
+        <g class="pp-head">
+          <rect x="11" y="12" width="42" height="26" rx="5" fill="#E8DCC0" stroke="#232A33" stroke-width="2"/>
+          <rect x="13" y="14" width="38" height="5" rx="2.5" fill="#F4ECD8" opacity="0.8"/>
+          <rect x="16" y="17" width="32" height="17" rx="3" fill="#F4ECD8" stroke="#232A33" stroke-width="1.6"/>
+          <g class="pp-eyes">
+            <path d="M28.5 21 q-4 4.5 0 9" stroke="#232A33" stroke-width="3" fill="none" stroke-linecap="round"/>
+            <path d="M35.5 21 q4 4.5 0 9"  stroke="#232A33" stroke-width="3" fill="none" stroke-linecap="round"/>
+          </g>
+          <rect x="45" y="15" width="4" height="1.6" fill="#232A33" opacity="0.5"/>
+        </g>
+        <!-- neck -->
+        <rect x="27" y="38" width="10" height="4" fill="#39424E" stroke="#232A33" stroke-width="1"/>
+        <!-- left arm -->
+        <g class="pp-arm pp-arm-l">
+          <rect x="9.5" y="43" width="5.5" height="9" rx="2" fill="#39424E" stroke="#232A33" stroke-width="1.2"/>
+          <rect x="8.5" y="51" width="7.5" height="9" rx="2.5" fill="#E8DCC0" stroke="#232A33" stroke-width="1.4"/>
+          <path d="M9.5 60 q-2 3.5 1 5.5" stroke="#232A33" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+          <path d="M14.5 60 q2 3.5 -1 5.5" stroke="#232A33" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+        </g>
+        <!-- right arm -->
+        <g class="pp-arm pp-arm-r">
+          <rect x="49" y="43" width="5.5" height="9" rx="2" fill="#39424E" stroke="#232A33" stroke-width="1.2"/>
+          <rect x="48" y="51" width="7.5" height="9" rx="2.5" fill="#E8DCC0" stroke="#232A33" stroke-width="1.4"/>
+          <path d="M49 60 q-2 3.5 1 5.5" stroke="#232A33" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+          <path d="M54 60 q2 3.5 -1 5.5" stroke="#232A33" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+        </g>
+        <!-- body -->
+        <g class="pp-body">
+          <rect x="16" y="42" width="32" height="17" rx="3.5" fill="#E8DCC0" stroke="#232A33" stroke-width="2"/>
+          <rect x="18" y="44" width="28" height="4" rx="2" fill="#F4ECD8" opacity="0.8"/>
+          <rect class="pp-chest-led" x="39" y="48" width="6" height="6" rx="1.4" fill="#E8901A" stroke="#232A33" stroke-width="1.2"/>
+          <rect x="20" y="54" width="4" height="1.6" fill="#232A33" opacity="0.5"/>
+        </g>
+        <!-- pelvis -->
+        <rect x="22" y="59" width="20" height="4" fill="#39424E" stroke="#232A33" stroke-width="1"/>
+        <rect x="25" y="62" width="14" height="7" rx="2.5" fill="#E8DCC0" stroke="#232A33" stroke-width="1.4"/>
+        <circle cx="29.5" cy="65.5" r="1.1" fill="#232A33"/>
+        <circle cx="34.5" cy="65.5" r="1.1" fill="#232A33"/>
+        <!-- legs -->
+        <g class="pp-leg pp-leg-l">
+          <rect x="23.5" y="66" width="6" height="7" fill="#39424E" stroke="#232A33" stroke-width="1.2"/>
+          <rect x="20.5" y="71.5" width="11.5" height="5.5" rx="2" fill="#E8DCC0" stroke="#232A33" stroke-width="1.4"/>
+          <rect x="20.5" y="75.8" width="11.5" height="2.6" rx="1.2" fill="#39424E" stroke="#232A33" stroke-width="1"/>
+        </g>
+        <g class="pp-leg pp-leg-r">
+          <rect x="34.5" y="66" width="6" height="7" fill="#39424E" stroke="#232A33" stroke-width="1.2"/>
+          <rect x="32" y="71.5" width="11.5" height="5.5" rx="2" fill="#E8DCC0" stroke="#232A33" stroke-width="1.4"/>
+          <rect x="32" y="75.8" width="11.5" height="2.6" rx="1.2" fill="#39424E" stroke="#232A33" stroke-width="1"/>
+        </g>
+      </svg>
+    </div>
   </div>
 </div>
 """,
@@ -421,163 +487,111 @@ _components.html(
   R.hover=function(e){const el=e.target.closest('button,[role="tab"],label,a,summary,[data-testid="stFileUploaderDropzone"]');
     if(!el)return;const q=R.quip((el.innerText||el.textContent||'').trim().slice(0,50));if(q)R.setBubble(q);};
 
-  // ── mood engine ───────────────────────────────────────────────────────────
-  // Each mood reshapes Recy's OWN face — no floating stickers. A mood declares:
-  //   mouth : the #recy-mouth path
-  //   eyeL/eyeR : per-eye transform (lets us wink one eye)
-  //   ant  : antenna colour
-  //   acc  : which face accessories to show — 'brows','glasses','sweat','sparkles'
-  //   hideEyes : hide the plain eyes (when glasses / heart-eyes take over)
-  // Add a new expression by adding one entry (+ an accessory <g> in the SVG if needed).
-  R.ACCS=['brows','glasses','sweat','sparkles'];
-  R.MOODS={
-    idle:     {mouth:'M18 30.5 Q23 34 28 30.5',                          eyeL:'',                eyeR:'',                ant:'#12b866', acc:[]},
-    thinking: {mouth:'M19 31.5 H27',                                     eyeL:'translateY(-1.6px)',eyeR:'translateY(-1.6px)',ant:'#f4b400', acc:['brows']},
-    happy:    {mouth:'M16.5 29.5 Q23 37 29.5 29.5',                      eyeL:'scaleY(.55)',     eyeR:'scaleY(.55)',     ant:'#12b866', acc:[]},
-    curious:  {mouth:'M18.5 31 Q23 33 27.5 30.5',                        eyeL:'translateY(-1px)',eyeR:'translateY(-1px)',ant:'#12b866', acc:['brows']},
-    wink:     {mouth:'M17 30 Q23 35.5 29 30.5',                          eyeL:'scaleY(.12)',     eyeR:'',                ant:'#12b866', acc:[]},
-    cool:     {mouth:'M17.5 31 Q23 34.5 28.5 31',                        eyeL:'',                eyeR:'',                ant:'#12b866', acc:['glasses'], hideEyes:true},
-    alert:    {mouth:'M20.5 32 a2.5 2.5 0 1 0 5 0 a2.5 2.5 0 1 0 -5 0',  eyeL:'scale(1.25)',     eyeR:'scale(1.25)',     ant:'#e23b3b', acc:['sweat']},
-    celebrate:{mouth:'M15.5 29 Q23 39 30.5 29',                          eyeL:'scaleY(.55)',     eyeR:'scaleY(.55)',     ant:'#f4b400', acc:['sparkles']},
-  };
-  // faces Recy cycles through each time you open the chat — a little surprise
-  R.GREETINGS=['happy','wink','curious','cool','celebrate'];
-  R.greetIdx=(R.greetIdx==null?-1:R.greetIdx);
-  R.setEyes=function(lt,rt){const l=pdoc.getElementById('recy-eye-l'),r=pdoc.getElementById('recy-eye-r');
-    if(l)l.style.transform=lt;if(r)r.style.transform=rt;};
-  R.paintEyes=function(tf){R.setEyes(tf,tf);};   // used by cursor-follow & blink (both eyes alike)
-  R.setMood=function(name,revert){const m=R.MOODS[name]||R.MOODS.idle;R.mood=name;
-    const mo=pdoc.getElementById('recy-mouth');if(mo)mo.setAttribute('d',m.mouth);
-    const an=pdoc.getElementById('recy-antenna');if(an)an.style.fill=m.ant;
-    const eyes=pdoc.getElementById('recy-eyes');if(eyes)eyes.style.opacity=m.hideEyes?'0':'1';
-    if(name==='idle')R.setEyes('','');           // idle hands the eyes back to the cursor
-    else R.setEyes(m.eyeL||'',m.eyeR||'');
-    R.ACCS.forEach(function(a){const g=pdoc.getElementById('recy-acc-'+a);
-      if(g)g.style.opacity=(m.acc&&m.acc.indexOf(a)>=0)?'1':'0';});
+  // ── mood engine (CSS-class driven, ported from BoltWidget) ─────────────────
+  // Four moods; each is just a class on #recy-bot that switches which CSS
+  // keyframes run: idle (bob+blink+antenna sway), walk (legs/arms/bounce),
+  // wave (one arm swings + head tilt), think (antenna + chest LED flash fast).
+  R.MOODLIST=['idle','walk','wave','think'];
+  R.setMood=function(name,revert){
+    if(R.MOODLIST.indexOf(name)<0)name='idle';
+    R.mood=name;
+    const bot=pdoc.getElementById('recy-bot');
+    if(bot)bot.className='pp-toy pp-mood-'+name;      // re-set class re-triggers the anim
     clearTimeout(R.moodT);
     if(revert)R.moodT=setTimeout(function(){R.setMood('idle');},revert);
   };
-  pdoc.__recySetMood=R.setMood;                // exposed for preview/manual testing
+  R.setFlip=function(d){const f=pdoc.getElementById('recy-flip');if(f)f.style.transform='scaleX('+d+')';};
+  pdoc.__recySetMood=R.setMood;                        // exposed for manual testing
 
-  // opening the chat: cycle to the next fun greeting face
-  R.greet=function(){R.greetIdx=(R.greetIdx+1)%R.GREETINGS.length;
-    R.setMood(R.GREETINGS[R.greetIdx],2600);};
+  R.chatOpen=function(){const p=pdoc.querySelector('[data-testid="stPopover"]');
+    return !!(p&&p.querySelector('button[aria-expanded="true"]'));};
 
   R.onClick=function(e){
     R.hover(e);
-    const el=e.target.closest('button,[role="tab"],label,a,summary,[data-testid="stFileUploaderDropzone"],[data-testid="stDownloadButton"],[data-testid="stPopover"]');
-    if(!el)return;const t=(el.innerText||el.textContent||'').trim().toLowerCase();
-    // specific actions win first; the bare popover trigger (empty label) → new face
-    if(t==='ask'){R.setMood('thinking');}
-    else if(t.includes('download')||el.closest('[data-testid="stDownloadButton"]')){R.setMood('celebrate',3800);}
-    else if(el.closest('[data-testid="stPopover"]')&&(t===''||t.includes('recy'))){R.greet();}  // clicked Recy's face
-  };
-  R.onMove=function(e){
-    if(R.mood!=='idle')return;
-    const bot=pdoc.getElementById('recy-bot');if(!bot)return;
-    const r=bot.getBoundingClientRect();const cx=r.left+r.width/2,cy=r.top+r.height/2;
-    const a=Math.atan2(e.clientY-cy,e.clientX-cx),d=2.4;
-    R.paintEyes('translate('+Math.cos(a)*d+'px,'+Math.sin(a)*d+'px)');
+    // clicking the robot (its invisible popover hotspot) → a friendly wave hello
+    if(e.target.closest&&e.target.closest('[data-testid="stPopover"]'))R.setMood('wave',1500);
   };
   R.scrollLog=function(){const m=pdoc.querySelector('.recylog-end');if(!m)return;
     let p=m.parentElement;for(let i=0;i<8&&p;i++){if(p.scrollHeight>p.clientHeight+4){p.scrollTop=p.scrollHeight;return;}p=p.parentElement;}};
   R.reactToState=function(){
-    if(pdoc.querySelector('[data-testid="stException"]')&&R.mood!=='alert'){R.setMood('alert',4000);return;}
+    // thinking spinner → think mood (antenna + chest flash); when it clears, wave
     const spin=/thinking/i.test((pdoc.querySelector('[data-testid="stSpinner"]')||{}).innerText||'');
-    if(spin){R.wasThinking=true;}
-    else if(R.wasThinking){R.wasThinking=false;if(R.mood==='thinking')R.setMood('happy',2800);}
+    if(spin){R.wasThinking=true;if(R.mood!=='think')R.setMood('think');return;}
+    if(R.wasThinking){R.wasThinking=false;R.setMood('wave',1500);}
     const ok=Array.from(pdoc.querySelectorAll('[data-testid="stAlert"],[data-baseweb="notification"]'))
       .some(function(n){return /sent to/i.test(n.innerText||'');});
-    if(ok&&R.mood!=='celebrate')R.setMood('celebrate',3000);
+    if(ok&&R.mood==='idle')R.setMood('wave',2000);
   };
 
-
-  // ── roaming pet engine — Recy wanders the WHOLE screen when idle ──────────
-  // Desktop-pet style: strolls to random spots, perches on top of buttons/tabs,
-  // lingers, eventually heads home to his corner. Never wanders while the chat
-  // is open or he's thinking; freezes when the cursor comes near so he's always
-  // clickable; the chat hotspot travels with him.
-  R.BOTW=46; R.BOTH=50; R.PAD=26;
+  // ── walking pet engine — Recy strolls along the BOTTOM EDGE when idle ──────
+  // Ported from BoltWidget's wander behaviour (README): picks a random spot along
+  // the bottom, walks there (legs stepping via the walk mood), flips to face its
+  // direction, lingers, and eventually heads back to its home corner. Freezes when
+  // the cursor is near or the chat is open, so it's always clickable; the invisible
+  // chat hotspot + the quip bubble travel with it.
+  R.BOTW=54; R.BOTH=68; R.PAD=26; R.GAP=14;
   R.homeX=function(){return pdoc.documentElement.clientWidth-R.PAD-R.BOTW;};
-  R.homeY=function(){return pdoc.documentElement.clientHeight-22-R.BOTH;};
-  if(R.px===undefined){R.px=null;R.py=null;}   // null = anchored at his corner
-  R.tx=R.tx||null; R.ty=R.ty||null; R.pauseT=R.pauseT||0;
+  R.pickX=function(w){const m=24,maxX=Math.max(m,w-R.BOTW-m);return m+Math.random()*(maxX-m);};
+  if(R.px===undefined){R.px=null;}             // null = anchored at the home corner
+  R.tx=R.tx||null; R.pauseT=R.pauseT||0;
   R.nextRoamAt=R.nextRoamAt||(Date.now()+15000);
   R.mx=-9999; R.my=-9999;
-  R.chatOpen=function(){const p=pdoc.querySelector('[data-testid="stPopover"]');
-    return !!(p&&p.querySelector('button[aria-expanded="true"]'));};
-  R.pickTarget=function(w,h){
-    // 60%: perch on a visible button / tab / expander header
-    if(Math.random()<0.6){
-      const els=Array.from(pdoc.querySelectorAll('button,[role="tab"],summary'))
-        .filter(function(el){if(!el.offsetParent)return false;
-          const r=el.getBoundingClientRect();
-          return r.width>=46&&r.height>=18&&r.top>96&&r.bottom<h-60&&r.left>36&&r.right<w-36;});
-      if(els.length){const r=els[(Math.random()*els.length)|0].getBoundingClientRect();
-        return {x:Math.min(Math.max(r.left+r.width/2-R.BOTW/2,10),w-R.BOTW-10),
-                y:Math.max(r.top-R.BOTH+8,70)};}                 // sit ON its top edge
-    }
-    return {x:40+Math.random()*Math.max(w-140,60),               // or any open spot
-            y:100+Math.random()*Math.max(h-280,60)};
-  };
-  R.applyPos=function(){const bot=pdoc.getElementById('recy-bot');if(!bot)return;
-    const cont=bot.parentElement,pop=pdoc.querySelector('[data-testid="stPopover"]'),
+  R.applyPos=function(){
+    const outer=pdoc.getElementById('recy-outer'),pop=pdoc.querySelector('[data-testid="stPopover"]'),
           bub=pdoc.getElementById('recy-bubble');
-    if(R.px==null){cont.style.left='';cont.style.top='';cont.style.right='26px';cont.style.bottom='22px';
-      if(pop){pop.style.left='';pop.style.top='';pop.style.right='26px';pop.style.bottom='26px';}
+    if(!outer)return;
+    if(R.px==null){                            // home: hand positioning back to CSS
+      outer.style.left='';outer.style.top='';outer.style.right=R.PAD+'px';outer.style.bottom=R.GAP+'px';
+      if(pop){pop.style.left='';pop.style.top='';pop.style.right=R.PAD+'px';pop.style.bottom=R.GAP+'px';}
       if(bub)bub.style.display='';
-      bot.style.transform='';bot.style.animation='';return;}
-    if(bub)bub.style.display='none';            // quips live at home only
-    cont.style.right='auto';cont.style.bottom='auto';
-    cont.style.left=R.px+'px';cont.style.top=R.py+'px';
-    if(pop){pop.style.right='auto';pop.style.bottom='auto';
-      pop.style.left=R.px+'px';pop.style.top=R.py+'px';}};
+      R.setFlip(1);return;}
+    if(bub)bub.style.display='none';           // quips live at home only
+    const top=pdoc.documentElement.clientHeight-R.GAP-R.BOTH;
+    outer.style.right='auto';outer.style.bottom='auto';outer.style.left=R.px+'px';outer.style.top=top+'px';
+    if(pop){pop.style.right='auto';pop.style.bottom='auto';pop.style.left=R.px+'px';pop.style.top=top+'px';}
+  };
   R.roamTick=function(){
     const bot=pdoc.getElementById('recy-bot');if(!bot)return;
     const w=pdoc.documentElement.clientWidth,h=pdoc.documentElement.clientHeight;
     if(w<760||pdoc.defaultView.matchMedia('(prefers-reduced-motion: reduce)').matches){
-      if(R.px!=null){R.px=null;R.py=null;R.applyPos();}return;}
-    const now=Date.now(), busy=R.chatOpen()||R.mood!=='idle';
+      if(R.px!=null){R.px=null;if(R.mood==='walk')R.setMood('idle');R.applyPos();}return;}
+    if(R.mood==='wave')return;                          // let a wave play out untouched
+    const now=Date.now(), busy=R.chatOpen()||R.mood==='think';
     const r=bot.getBoundingClientRect();
     const near=Math.abs(R.mx-(r.left+r.width/2))<70&&Math.abs(R.my-(r.top+r.height/2))<90;
-    if(R.px==null){                                       // anchored at home
+    if(R.px==null){                                     // anchored at home
       if(busy||near||now<R.nextRoamAt)return;
-      R.px=R.homeX();R.py=R.homeY();
-      const t=R.pickTarget(w,h);R.tx=t.x;R.ty=t.y;        // set off!
+      R.px=R.homeX();R.tx=R.pickX(w);                   // set off along the bottom!
     }
-    if(busy){R.tx=R.homeX();R.ty=R.homeY();}              // called back to duty
-    if((near&&!busy)||now<R.pauseT){R.applyPos();return;} // freeze / linger
-    const dx=R.tx-R.px,dy=R.ty-R.py,dist=Math.hypot(dx,dy),step=2.4;
-    if(dist<=step){                                       // arrived
-      R.px=R.tx;R.py=R.ty;
-      if(Math.hypot(R.px-R.homeX(),R.py-R.homeY())<6){    // back home → re-anchor
-        R.px=null;R.py=null;R.tx=null;R.ty=null;
-        R.nextRoamAt=now+20000+Math.random()*40000;R.applyPos();return;}
-      R.pauseT=now+3000+Math.random()*7000;               // perch a while
-      bot.style.transform='scaleX(1)';                    // sit straight
-      if(Math.random()<0.5){R.tx=R.homeX();R.ty=R.homeY();}
-      else{const t=R.pickTarget(w,h);R.tx=t.x;R.ty=t.y;}
-      R.applyPos();return;}
-    R.px+=dx/dist*step;R.py+=dy/dist*step;
-    bot.style.animation='none';                           // waddle instead of bob
-    bot.style.transform='scaleX('+(dx<0?-1:1)+') rotate('+(Math.sin((R.px+R.py)/7)*5).toFixed(2)+'deg)';
+    if(busy)R.tx=R.homeX();                             // called back to duty
+    if((near&&!busy)||now<R.pauseT){                    // freeze / linger → stand idle
+      if(R.mood==='walk')R.setMood('idle');R.applyPos();return;}
+    const dx=R.tx-R.px,dist=Math.abs(dx),step=2.6;
+    if(dist<=step){                                     // arrived
+      R.px=R.tx;
+      if(R.mood==='walk')R.setMood('idle');
+      if(Math.abs(R.px-R.homeX())<6){                   // back home → re-anchor
+        R.px=null;R.tx=null;R.nextRoamAt=now+20000+Math.random()*40000;R.applyPos();return;}
+      R.pauseT=now+3000+Math.random()*7000;             // stand a while
+      R.tx=(Math.random()<0.5)?R.homeX():R.pickX(w);    // then home or somewhere new
+      R.setFlip(1);R.applyPos();return;}
+    if(R.mood!=='walk')R.setMood('walk');               // stepping
+    R.setFlip(dx<0?-1:1);                               // face the way we're going
+    R.px+=(dx<0?-step:step);
     R.applyPos();};
 
   // ── bind listeners + timers ONCE (all delegate to the R.* above) ───────────
   if(!pdoc.__recyBound){
     pdoc.__recyBound=true;
-    pdoc.addEventListener('mouseover',function(e){R.hover(e);},true);
+    pdoc.addEventListener('mouseover',function(e){
+      R.hover(e);
+      // hovering the robot itself → a little wave (README behaviour)
+      if(e.target.closest&&e.target.closest('[data-testid="stPopover"]')&&R.mood==='idle'&&!R.chatOpen())
+        R.setMood('wave',1300);
+    },true);
     pdoc.addEventListener('click',function(e){R.onClick(e);},true);
-    pdoc.addEventListener('mousemove',function(e){R.mx=e.clientX;R.my=e.clientY;R.onMove(e);},true);
+    pdoc.addEventListener('mousemove',function(e){R.mx=e.clientX;R.my=e.clientY;},true);
     setInterval(function(){try{R.roamTick();}catch(err){}},40);
-    // gentle blink every few seconds, only when idle — so Recy feels alive
-    setInterval(function(){
-      if(R.mood!=='idle')return;
-      const l=pdoc.getElementById('recy-eye-l'),r=pdoc.getElementById('recy-eye-r');
-      if(!l||!r)return;const pl=l.style.transform,pr=r.style.transform;
-      l.style.transform='scaleY(.1)';r.style.transform='scaleY(.1)';
-      setTimeout(function(){if(R.mood==='idle'){l.style.transform=pl;r.style.transform=pr;}},130);
-    },4200);
     new MutationObserver(function(){clearTimeout(R.st);
       R.st=setTimeout(function(){R.scrollLog();R.reactToState();},80);})
       .observe(pdoc.body,{childList:true,subtree:true});
@@ -1731,9 +1745,9 @@ elif page == "Summary Report":
                        "input columns (engine computes Purchase/Amount/Net Qty/Total Cost/Net "
                        "Revenue/Margins/GST); **no CN/DN provision** applied. Write a **Reason** "
                        "for each change. **Apply** = use this stored entry for this MIS: if it "
-                       "matches a live line (see *Matches live?*) ticking Apply **replaces** the "
-                       "live line with your version; unticking keeps the live line. Non-matching "
-                       "entries are additions. Rows **stay stored** until edited.")
+                       "matches a live line ticking Apply **replaces** the live line with your "
+                       "version; unticking keeps the live line (then *Same as live?* ticks). "
+                       "Non-matching entries are additions. Rows **stay stored** until edited.")
             st.caption(_durability_note)
             st.caption("**Formats** — **Date** columns: `YYYY-MM-DD` or `DD-MM-YYYY` "
                        "(e.g. `2026-07-05` or `05-07-2026`). **Amounts / rates**: plain "
@@ -1819,18 +1833,24 @@ elif page == "Summary Report":
             _ml_seed["Reason"] = _ml_seed["Reason"].where(_ml_seed["Reason"].notna(), "")
             _ml_seed["Apply"] = _ml_seed["Apply"].map(lambda x: True if pd.isna(x) else bool(x)) \
                 if "Apply" in _ml_seed else True
-            # 'Matches live?' — does this entry's Shipment·Invoice·Material hit a live line?
-            _ml_seed.insert(0, "Matches live?", [
-                (str(s).strip(), str(i).strip(), str(m).strip()) in _live_keys
-                for s, i, m in zip(_ml_seed.get("Shipment ID", ""),
-                                   _ml_seed.get("Inv. No.", ""),
-                                   _ml_seed.get("Material", ""))] if len(_ml_seed) else [])
+            # 'Same as live?' — ticked ONLY when this entry matches a live line AND
+            # Apply is UNticked, i.e. the details will keep the live line unchanged.
+            # If Apply is ticked, your changed version replaces the live line, so it's
+            # no longer the same as live (and a non-matching entry has no live twin).
+            _ml_seed.insert(0, "Same as live?", [
+                ((str(s).strip(), str(i).strip(), str(m).strip()) in _live_keys) and not bool(a)
+                for s, i, m, a in zip(_ml_seed.get("Shipment ID", ""),
+                                      _ml_seed.get("Inv. No.", ""),
+                                      _ml_seed.get("Material", ""),
+                                      _ml_seed.get("Apply", True))] if len(_ml_seed) else [])
             # per-column type + format tooltip, driven by each field's dtype
             _ml_dtypes = {lbl: d for lbl, _p, d in reports.MANUAL_INPUT_FIELDS}
             _ml_colcfg = {
-                "Matches live?": st.column_config.CheckboxColumn(
-                    "Matches live?", help="This entry's Shipment·Invoice·Material matches a live "
-                    "line in this MIS — ticking Apply replaces that live line with your version."),
+                "Same as live?": st.column_config.CheckboxColumn(
+                    "Same as live?", help="Ticked only when this entry matches a live line in this "
+                    "MIS AND Apply is unticked — i.e. the details keep the live line unchanged. "
+                    "Tick Apply to use your changed version instead (then it's no longer the same "
+                    "as live). Refreshes after Save."),
                 "Apply": st.column_config.CheckboxColumn(
                     "Apply", default=True, help="Use this stored entry for THIS MIS. If it matches "
                     "a live line, Apply replaces the live line with your version; untick to keep "
@@ -1865,35 +1885,21 @@ elif page == "Summary Report":
             _ml_res = st.data_editor(
                 _ml_seed, num_rows="dynamic", use_container_width=True,
                 key=f"ml_editor_{len(_ml_prefill)}", column_config=_ml_colcfg,
-                disabled=["Matches live?"])
+                disabled=["Same as live?"])
             _m2 = st.session_state.pop("ml_save_msg", None)
             if _m2:
                 (st.warning if "⚠" in _m2 else st.success)(_m2)
             if st.button("💾 Save manual line items", key="ml_save"):
-                _n = db.save_manual_lines(_ml_res.drop(columns=["Matches live?"], errors="ignore"))
+                _n = db.save_manual_lines(_ml_res.drop(columns=["Same as live?"], errors="ignore"))
                 st.session_state["ml_save_msg"] = _save_feedback(_n, "manual line item(s)")
                 st.session_state.pop("ml_prefill", None)          # loaded rows now stored
                 st.rerun()
         if not _ml_store.empty:
             profit_df = reports.inject_manual_line_items(profit_df, _ml_store)
 
-        # ── Last Year Shipments — CN/DN + Cash Discount + Logistics (preview) ─
-        if _cn is not None or _dn is not None or _bill is not None:
-            _lb = reports.last_year_left_behind(profit_df, _cn, _dn, _bill, _atxn)
-            with st.expander(f"🗂️ Last Year Shipments — {len(_lb)} CN/DN left behind "
-                             "(shipment not in Details)"):
-                st.caption("Credit/Debit notes (from the MIS **CN & DN sheets**) whose shipment "
-                           "has **no row in the current Details** — typically last-year shipments "
-                           "still receiving CN/DN. Vertical is read from each note's **Account** "
-                           "column. Included as a **'Last Year Shipments'** sheet in every "
-                           "downloaded workbook.")
-                if len(_lb):
-                    _lbsum = (_lb.groupby(["Vertical", "Type"], as_index=False)
-                              .agg(Rows=("Amount", "size"), Amount=("Amount", "sum")))
-                    st.dataframe(_lbsum, hide_index=True, use_container_width=True)
-                    st.dataframe(_lb, hide_index=True, use_container_width=True, height=360)
-                else:
-                    st.info("No left-behind CN/DN — every note's shipment is in the Details.")
+        # Last Year Shipments preview removed from the frontend (of no use on-screen).
+        # The 'Last Year Shipments' sheet is still built into every downloaded
+        # workbook from _cn/_dn/_bill/_atxn via reports.combined_workbook.
 
         _ent_oc = db.load_enterprise_opcost()
         with st.expander(f"⚙️ Enterprise — Operational Cost overrides ({len(_ent_oc)} month(s) stored)"):

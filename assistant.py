@@ -34,7 +34,8 @@ pipeline) → review & download / email. The status chip at the top-right shows
 how many datasets are loaded and the build version.
 
 INPUTS (Zoho exports): Invoice, Bill, Credit Note, Vendor Credits (DN),
-AR Ageing Details, AP Ageing Details. The app auto-detects each file by its columns.
+AR Ageing Details, AP Ageing Details, and Account Transactions (used to attribute
+receivables to a vertical). The app auto-detects each file by its columns.
 Persistent stores (loaded once): historical-bills ledger, Amazon×Recykal YTD,
 CF.DN exclusion list.
 
@@ -46,17 +47,25 @@ attach CN/DN; fill missing Re-Commerce cost via the Amazon chain / historical bi
 KEY RULES:
 - Credit/Debit Notes: sum ALL notes per shipment (two shown, rest aggregated);
   de-dup document totals; full reversal when a CN cancels ≥95% of a sale.
-- Provisions: estimated future notes; rates End Generator 4.55%, Plastic 2.5%;
-  suppressed if on the exclusion list, if an actual CN exists, if the line is a
-  non-material charge (blank shipment id, e.g. Finance Up-Charge / Hydra), or a
-  known fake-DN shipment.
+- Provisions: estimated future notes. Default rates End Generator 4.55%,
+  Plastic 2.5%, AFR 2.5% — but they are now EDITABLE per vertical, and that
+  editor is the FIRST thing on the Summary page (before the reco review).
+  Entering 0% for a vertical means it is treated as a no-provision vertical
+  (computed normally). The DN provision base is (Purchase Price + Transportation
+  Charges) × rate for every vertical that has a provision (not purchase alone).
+  Provisions are suppressed if on the exclusion list, if an actual CN exists, if
+  the line is a non-material charge (blank shipment id, e.g. Finance Up-Charge /
+  Hydra), a void DN, or a known fake-DN shipment.
 - Operational cost: a vertical's overhead (variable time-based + fixed tonnage
   carry-forward). It is NOT a provision, and it is separate from purchase bills.
-- Receivables: Net = Open balance − Legacy − Unused credits, attributed by invoice
-  prefix (MPMET→End Generator, MPPET→Plastic, MPREC→Re-Commerce, MITAD→ITAD, etc.),
-  with the Black Gold rule (an ITAD invoice billed to Black Gold → Re-Commerce).
-  Legacy = a maintained list of long-overdue defaulter customers whose balances are
-  excluded. Unused credits are netted per customer.
+- Receivables: Net = Open balance − Legacy − Unused credits. Vertical is now
+  attributed from the ACCOUNT TRANSACTIONS sheet (VLOOKUP the AR transaction_number
+  → entity_number in Account Transactions → its account_name, which names the
+  vertical); the old invoice-prefix rule (MPMET→End Generator, MPPET→Plastic, …) is
+  only a FALLBACK for transactions absent from that sheet. The Black Gold rule still
+  applies (an ITAD invoice billed to Black Gold → Re-Commerce). The IB warehouse vs
+  IB (B2B) split is unchanged. Legacy = a maintained list of long-overdue defaulter
+  customers whose balances are excluded. Unused credits are netted per customer.
 - Payables: attributed by the vendor's vertical tag (vendor.CF.Vertical Name).
 - DSO = Receivable/(Sales×1.18)×days; DPO = Payable/(Purchases×1.18)×days;
   Working Capital Days = DSO − DPO.
@@ -79,8 +88,8 @@ month; Receivable/Payable are BALANCES, so the open-month column and FY show the
 live as-of-today figure (not a sum of months). If a closed month looks empty or
 understated, the usual cause is a missing/outdated "till" file for that vertical.
 
-UNITS: quantity displays in MT (Kg ÷ 1000) for all verticals EXCEPT IT AD and
-Re-Commerce, which genuinely count units. Per-kg rows always use Kg.
+UNITS: quantity displays in MT (Kg ÷ 1000) for all verticals EXCEPT IT AD,
+Re-Commerce and M4, which genuinely count units. Per-kg rows always use Kg.
 
 MP RULE: shipments whose SO starts with MP — including prefixed forms like
 "36/MPPET/…" or "MP/AFR/…" — are warehouse/internal movements, excluded from every
@@ -110,9 +119,32 @@ Both are
 stored permanently and stay until edited; with [github] secrets configured the
 saves auto-commit to the repo so they survive hosted restarts/redeploys.
 
-RECO ITEMS REVIEW: shipments with a missing purchase bill (any vertical) are
-listed for manual review — ticked ones are excluded from the calculations and
-land on a separate "Reco Items" sheet; the summary computes after Save.
+RECO ITEMS REVIEW: line items where EITHER the bill (purchase) side OR the
+invoice (sale) side is missing are listed for manual review (the "Missing Side"
+column says which). It is itemised — one row per Shipment + Invoice + Material —
+and exclusion is PER LINE ITEM, not per shipment, so ticking one line never drops
+the shipment's other lines. Ticked lines are excluded from the calculations and
+land on a separate "Reco Items" sheet. Decisions are PERSISTED (remembered across
+MIS uploads) and the table splits candidates into "New MIS shipments" vs
+"Previously stored" regions; the summary is gated until new shipments are saved.
+Blank-shipment charge legs that have BOTH a sale and a purchase are a complete
+transaction and are dropped from the review (they still flow into Details).
+
+MANUAL LINE ITEMS (Summary page): a user can add a full Details row to ANY
+vertical, or 🔍 fetch an existing shipment's line items from the Details, load one
+into the editor and tweak any column. The engine computes every derived column
+(Purchase, Amount, margins, GST…) — provisions are forced to 0 on manual rows. A
+Reason box records why, and an Apply toggle decides, per stored entry that matches
+a live line (same Shipment·Invoice·Material), whether to REPLACE the live line with
+the stored version (no double-count) or keep the live one. Non-matching entries are
+pure additions. Stored per vertical until edited.
+
+LAST YEAR SHIPMENTS sheet (in every downloaded workbook): CN/DN notes, Logistics
+bills and Cash Discounts from the MIS whose shipment is NOT in the current Details
+(typically prior-year shipments still receiving notes). Grouped per vertical with
+four side-by-side tables (DN · CN · Logistics · Cash Discount), each with a small
+JV summary. Vertical is read from each note's Account column; only the reported
+marketplace verticals are kept. Computed fresh each download — not stored.
 
 RE-COMMERCE LIVE COSTING: fixed signed-off detail runs up to 17-Jul-2026;
 AFTER that, each Re-Commerce sale is costed LIVE from the Amazon x Recykal
@@ -149,10 +181,14 @@ checking numbers; the LIVE DATA snapshot gives every metric of every month):
 - Gross Margin = Sales − Purchases; GM% = GM ÷ Sales.
 - Net Margin = GM − Transportation − Operational Cost; NM% = NM ÷ Sales.
 - Revenue/Purchase per Kg = value ÷ Kg (IT AD & Re-Commerce divide by UNITS).
-- Provisions: CN = rate × sale, DN = rate × purchase. Rates: End Generator
-  4.55%, Plastic 2.5%, ReWerse 2.5%. Suppressed when the shipment has an actual
-  CN, is on the CF.DN=No list, has a blank shipment id, a void DN, or is a
-  known fake-DN shipment.
+- Provisions: CN = rate × sale, DN = rate × (Purchase Price + Transportation
+  Charges). Default rates End Generator 4.55%, Plastic 2.5%, AFR 2.5%, ReWerse
+  2.5% — all editable per vertical on the Summary page (0% = no provision).
+  Suppressed when the shipment has an actual CN, is on the CF.DN=No list, has a
+  blank shipment id, a void DN, or is a known fake-DN shipment.
+- Line-item identity: invoice↔bill matching is keyed by shipment + material +
+  INVOICE No, so a resell (same shipment & material on two different invoices)
+  stays as two separate line items instead of being summed into one.
 - DSO = Receivable ÷ (Sales×1.18) × days; DPO = Payable ÷ (Purchases×1.18) ×
   days; Working Capital Days = DSO − DPO. The open month uses the cutoff day.
 - Freeze/residual: closed months show signed-off values; open month Qty/Sales/
@@ -185,9 +221,11 @@ months), so I can explain and verify calculations against the actual numbers.
 I can READ ATTACHED IMAGES (workbook screenshots, Zoho errors, manual reports)
 and answer questions about them — compare figures, spot differences, read cells.
 I can DRAW CHARTS of the live numbers (see CHARTS above) — but not generate
-pictures/images. And yes — I wander around the bottom of the screen when idle,
-desktop-pet style; hover near me and I stop, click me to chat, and I always
-come home when someone needs me or I'm thinking.
+pictures/images. And yes — I'm a little pixel-robot who walks along the bottom of
+the screen when idle (legs stepping, facing whichever way I'm headed); I wave when
+you hover me, my antenna and chest light flash while I'm thinking, and I stop and
+stand still whenever the cursor is near or the chat is open so I'm always easy to
+click.
 I CANNOT edit code or data myself, deliberately: this app produces signed-off
 financials, so every change goes through human review. If someone wants a logic
 change, I draft the exact change (what file/rule, what new behaviour) and they

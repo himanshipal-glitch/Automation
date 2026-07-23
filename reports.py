@@ -977,11 +977,15 @@ def last_year_left_behind(profit_df: pd.DataFrame,
     def _extract(df, typ, date_names, num_names, party_names, status_names, extra_names=None):
         if df is None or getattr(df, "empty", True):
             return pd.DataFrame(columns=LAST_YEAR_COLS)
-        low = {str(c).strip().lower(): c for c in df.columns}
+        # match on ALPHANUMERICS only — the session store sanitizes names
+        # ('Credit Note Date' → 'Credit_Note_Date'), so a space-based match missed
+        # every multi-word column (Date, Number, Party came back blank).
+        _nrm = lambda s: "".join(ch for ch in str(s).lower() if ch.isalnum())
+        low = {_nrm(c): c for c in df.columns}
         def col(*names):
             for n in names:
-                if n.lower() in low:
-                    return low[n.lower()]
+                if _nrm(n) in low:
+                    return low[_nrm(n)]
             return None
         ref = col("reference#", "referenceno", "reference no", "reference number", "cf.so number")
         if ref is None:
@@ -1030,11 +1034,12 @@ def last_year_left_behind(profit_df: pd.DataFrame,
     # the shipment's account in Account Transactions.
     cd = pd.DataFrame(columns=LAST_YEAR_COLS)
     if cn_df is not None and not getattr(cn_df, "empty", True):
-        _low = {str(c).strip().lower(): c for c in cn_df.columns}
+        _nrm2 = lambda s: "".join(ch for ch in str(s).lower() if ch.isalnum())
+        _low = {_nrm2(c): c for c in cn_df.columns}
         def _cc(*names):
             for n in names:
-                if n.lower() in _low:
-                    return _low[n.lower()]
+                if _nrm2(n) in _low:
+                    return _low[_nrm2(n)]
             return None
         _acc = _cc("account"); _ref = _cc("reference#", "referenceno", "reference number", "cf.so number")
         if _acc is not None and _ref is not None:
@@ -1066,7 +1071,8 @@ def last_year_left_behind(profit_df: pd.DataFrame,
     # and whose shipment isn't in Details → last-year logistics table.
     log = pd.DataFrame(columns=LAST_YEAR_COLS)
     if bill_df is not None and not getattr(bill_df, "empty", True):
-        _accc = next((c for c in bill_df.columns if str(c).strip().lower() == "account"), None)
+        _accc = next((c for c in bill_df.columns
+                      if "".join(ch for ch in str(c).lower() if ch.isalnum()) == "account"), None)
         if _accc is not None:
             _logb = bill_df[bill_df[_accc].astype(str).str.contains("marketplace logistics",
                                                                      case=False, na=False)]

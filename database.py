@@ -608,6 +608,59 @@ def reco_review_count() -> int:
     return len(load_reco_review())
 
 
+# ── Last Year provision inputs (persistent) ───────────────────────────────────
+# Per (Vertical, Table) manual figures shown in the Last Year sheet's 3-row
+# summary: "Marketplace CN, DN and expense provision" and "NO DN value". Entered
+# after the reco review, before building the summary/details. GitHub-synced.
+LAST_YEAR_INPUTS_PATH = PERSIST_DIR / "last_year_inputs.parquet"
+LAST_YEAR_TABLES = ["CN", "DN", "Cash Discount", "Logistics"]
+LAST_YEAR_INPUT_COLS = ["Vertical", "Table", "Provision", "NO DN Value"]
+
+
+def save_last_year_inputs(df: pd.DataFrame) -> int:
+    """Full snapshot — replaces. Rows: Vertical · Table · Provision · NO DN Value.
+    Keeps rows with a Vertical + a recognised Table; numbers coerced (blank→0)."""
+    global LAST_SAVE_DROPPED
+    LAST_SAVE_DROPPED = []
+    if df is None:
+        return last_year_inputs_count()
+    d = df.copy()
+    d.columns = [str(c) for c in d.columns]
+    d = d.reindex(columns=LAST_YEAR_INPUT_COLS)
+    vert = d["Vertical"].astype(str).str.strip()
+    tbl = d["Table"].astype(str).str.strip()
+    ok = vert.ne("") & vert.str.lower().ne("nan") & tbl.isin(LAST_YEAR_TABLES)
+    d = d[ok].reset_index(drop=True)
+    if len(d):
+        for c in ("Provision", "NO DN Value"):
+            d[c] = pd.to_numeric(d[c], errors="coerce").fillna(0.0)
+    return _save_small(d, LAST_YEAR_INPUTS_PATH,
+                       sync_msg="Update Last Year provision inputs (app entry)")
+
+
+def load_last_year_inputs() -> pd.DataFrame:
+    d = _load_small(LAST_YEAR_INPUTS_PATH)
+    if d.empty:
+        return pd.DataFrame(columns=LAST_YEAR_INPUT_COLS)
+    return d.reindex(columns=LAST_YEAR_INPUT_COLS)
+
+
+def last_year_inputs_map() -> dict:
+    """{(Vertical, Table): {'provision': float, 'no_dn': float}}"""
+    d = load_last_year_inputs()
+    out = {}
+    for _, r in d.iterrows():
+        out[(str(r["Vertical"]).strip(), str(r["Table"]).strip())] = {
+            "provision": float(pd.to_numeric(pd.Series([r["Provision"]]), errors="coerce").fillna(0).iloc[0]),
+            "no_dn": float(pd.to_numeric(pd.Series([r["NO DN Value"]]), errors="coerce").fillna(0).iloc[0]),
+        }
+    return out
+
+
+def last_year_inputs_count() -> int:
+    return len(load_last_year_inputs())
+
+
 # ── Accumulated profitability-details store (permanent) ──────────────────────
 # Zoho's MIS export is ROLLING — each one only carries recent invoices, so a
 # month's line rows vanish from later exports. This store accumulates every

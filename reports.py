@@ -2650,6 +2650,13 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
                         return vv == _vt
                     _lb = _lb[_lb["Vertical"].map(_vmatch)].reset_index(drop=True)
                 from openpyxl.utils import get_column_letter as _gcl
+                # stored per-(Vertical, Table) provision / NO-DN from the app's
+                # 🗓️ Last Year provisions box; a table with no stored figures is
+                # left blank in the sheet with a live Closing-Provision formula.
+                try:
+                    _inp = _dbm.last_year_inputs_map() if _dbm is not None else {}
+                except Exception:
+                    _inp = {}
                 _shn = "Last Year Shipments"
                 _BW = 7                                   # columns per side-by-side block
                 # per-table: opening-provision label · 'Pertaining to FY' label ·
@@ -2686,20 +2693,29 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
                             _cfg = _CFG[_t]
                             _tb = _lb[(_lb["Vertical"].astype(str) == _v) & (_lb["Type"] == _t)]
                             _acct = round(float(_tb["Amount"].sum()), 2) if len(_tb) else 0.0
-                            # provision + NO-DN are entered MANUALLY in Excel (left
-                            # blank here); Closing Provision is a live formula that
-                            # recomputes = provision − accounted − NO-DN once filled.
-                            _amtL = _gcl(_c0 + 3)                     # Amount column letter
-                            _rowP, _rowA, _rowN = _top + 3, _top + 4, _top + 5   # excel rows
-                            _close = f"={_amtL}{_rowP}-{_amtL}{_rowA}-{_amtL}{_rowN}"
+                            _ent = _inp.get((_v, _t))
+                            if _ent is not None:
+                                # stored figures from the app → write the numbers and a
+                                # computed Closing Provision.
+                                _provcell = round(float(_ent.get("provision", 0.0)), 2)
+                                _nodncell = round(float(_ent.get("no_dn", 0.0)), 2)
+                                _close = round(_provcell - _acct - _nodncell, 2)
+                            else:
+                                # nothing stored → leave provision/NO-DN blank for manual
+                                # entry in Excel; Closing Provision is a live formula that
+                                # recomputes = provision − accounted − NO-DN once filled.
+                                _amtL = _gcl(_c0 + 3)                 # Amount column letter
+                                _rowP, _rowA, _rowN = _top + 3, _top + 4, _top + 5   # excel rows
+                                _close = f"={_amtL}{_rowP}-{_amtL}{_rowA}-{_amtL}{_rowN}"
+                                _provcell = _nodncell = None
                             # title
                             pd.DataFrame([[_t]]).to_excel(w, sheet_name=_shn, startrow=_top,
                                                           startcol=_c0, index=False, header=False)
                             _headers.append((_shn, _top + 1))
-                            # 4-row summary (provision/NO-DN blank for manual entry)
-                            pd.DataFrame([["", _cfg["prov"], None],
+                            # 4-row summary (stored figures, or blank for manual entry)
+                            pd.DataFrame([["", _cfg["prov"], _provcell],
                                           ["", "Accounted in FY 2026-27", _acct],
-                                          ["", "NO DN value", None],
+                                          ["", "NO DN value", _nodncell],
                                           ["", "Closing Provision", _close]],
                                          columns=["JV Number", "Particulars", "Amount"]) \
                                 .to_excel(w, sheet_name=_shn, startrow=_top + 1, startcol=_c0, index=False)

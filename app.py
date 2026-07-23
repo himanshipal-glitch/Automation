@@ -224,7 +224,7 @@ with st.container(key="rkheader"):
         # build tag — bump when pushing significant changes; confirms which version
         # a deployed instance is running (hosted apps can lag behind the repo)
         with st.expander(f"{len(loaded)}/{len(status)} sheets · v3.3.4"):
-            st.caption("build: **v3.10.1 — Manual line items: each input column shows its expected format (Date YYYY-MM-DD/DD-MM-YYYY, numbers plain, Qty per Qty-Unit) via column tooltips + a format legend. Full raw-input column set (all non-derived Details fields); the engine computes every derived column (Purchase/Amount/Net Qty/Total Cost/Net Revenue/Margins/GST) in real time. Per-row Qty Unit toggle (Display MT/units vs Kg). Stored per-vertical until edited; no auto-provision. Reco review: blank-shipment charge legs (bill + invoice) that match by material are a COMPLETE transaction, so they're dropped from the review (they stay in Details/summary); only genuinely one-sided blank-shipment items remain. DN provision base is now (Purchase Price + Transportation Charges) × rate, not Purchase Price alone (all verticals with a provision). Invoice-line matching keyed by shipment+material+INVOICE NO, so same-shipment/same-material lines on different invoices (e.g. End Generator resell, SH072616016) stay separate instead of being summed. M4 quantity now counts UNITS (like IT AD/Re-Commerce), not MT — fixes M4 FY-total quantity (was collapsing to ~0 via Kg÷1000 vs the frozen unit count). Receivables vertical from the Account Transactions sheet (VLOOKUP transaction_number→entity_number→account_name), prefix logic only as fallback for txns absent there. 8th sheet ingested. IB warehouse/B2B split unchanged. AFR 2.5% provision; editable per-vertical provision %; Reco per-line exclusion.**")
+            st.caption("build: **v3.14.0 — Manual line items: 🔍 fetch+edit an existing line (overrides it), a Reason box per entry, and an Apply toggle — on each MIS a stored entry matching a live line (Shipment·Invoice·Material) shows 'Matches live?'; Apply replaces the live line with your version, untick keeps live. New 'Last Year Shipments' sheet: CN/DN (from the MIS CN & DN sheets) whose shipment isn't in Details for this MIS, vertical read from each note's Account column; per-vertical×type subtotals + detail. Manual line items: 🔍 Fetch an existing shipment's line items from Details, load one into the editor, tweak any column; on Save it REPLACES that computed line (no double-count). Reco review: adds Supplier Name + Vendor Invoice No; decisions now PERSISTED (remembered across MIS uploads); split into 🆕 New MIS shipments vs 📁 Previously stored regions (new→stored on Save); summary gated only while unsaved new shipments exist. Manual line items: each input column shows its expected format (Date YYYY-MM-DD/DD-MM-YYYY, numbers plain, Qty per Qty-Unit) via column tooltips + a format legend. Full raw-input column set (all non-derived Details fields); the engine computes every derived column (Purchase/Amount/Net Qty/Total Cost/Net Revenue/Margins/GST) in real time. Per-row Qty Unit toggle (Display MT/units vs Kg). Stored per-vertical until edited; no auto-provision. Reco review: blank-shipment charge legs (bill + invoice) that match by material are a COMPLETE transaction, so they're dropped from the review (they stay in Details/summary); only genuinely one-sided blank-shipment items remain. DN provision base is now (Purchase Price + Transportation Charges) × rate, not Purchase Price alone (all verticals with a provision). Invoice-line matching keyed by shipment+material+INVOICE NO, so same-shipment/same-material lines on different invoices (e.g. End Generator resell, SH072616016) stay separate instead of being summed. M4 quantity now counts UNITS (like IT AD/Re-Commerce), not MT — fixes M4 FY-total quantity (was collapsing to ~0 via Kg÷1000 vs the frozen unit count). Receivables vertical from the Account Transactions sheet (VLOOKUP transaction_number→entity_number→account_name), prefix logic only as fallback for txns absent there. 8th sheet ingested. IB warehouse/B2B split unchanged. AFR 2.5% provision; editable per-vertical provision %; Reco per-line exclusion.**")
             for sheet in loaded:
                 tbls = status[sheet]["tables"]
                 row_str = " · ".join(f"{t}: {n:,}" for t, n in tbls.items())
@@ -1514,10 +1514,15 @@ elif page == "Summary Report":
         # Account Transactions sheet → authoritative per-transaction vertical for
         # receivables attribution (VLOOKUP transaction_number → account_name).
         _acct_txn = db.read_table("AcctTxn", "raw").drop(columns=["_source_file"], errors="ignore")
+        # MIS CN/DN sheets → 'Last Year Shipments' (notes whose shipment isn't in Details).
+        _cn_raw = db.read_table("CN", "raw").drop(columns=["_source_file"], errors="ignore")
+        _dn_raw = db.read_table("DN", "raw").drop(columns=["_source_file"], errors="ignore")
         _ar = ar_df if not ar_df.empty else None
         _ap = ap_df if not ap_df.empty else None
         _obills = op_bills if not op_bills.empty else None
         _atxn = _acct_txn if not _acct_txn.empty else None
+        _cn = _cn_raw if not _cn_raw.empty else None
+        _dn = _dn_raw if not _dn_raw.empty else None
 
         # ── Re-Commerce: FIXED signed-off detail up to the cutover (17-07-2026);
         # everything AFTER it is built LIVE from the Amazon × Recykal Google
@@ -1554,12 +1559,13 @@ elif page == "Summary Report":
         _pdates = reports.parse_dates(profit_df.iloc[:, 2])
         _open_m = _pdates.max().strftime("%b-%y") if _pdates.notna().any() else None
 
-        # ── Reco Items — manual review, ALL verticals (gate the summary until saved) ──
-        # Shipments (any vertical) with a missing bill are candidates for exclusion.
-        # The user ticks the ones to KEEP in Reco Items (excluded from calcs);
-        # unticked ones flow into the Details & summary. The box is always shown.
+        # ── Reco Items — manual review, ALL verticals ────────────────────────
+        # Line items (any vertical) missing a bill/invoice side are candidates for
+        # exclusion. Decisions are PERSISTED (db.reco_review): a re-upload shows
+        # previously-reviewed shipments with their prior choice under 'Previously
+        # stored', and never-seen shipments under 'New MIS shipments'. The summary
+        # is gated only while UNSAVED new shipments exist.
         _cand = reports.reco_candidates(profit_df)
-        _sig = tuple(sorted(_cand["Shipment ID"].tolist())) if len(_cand) else ()
 
         # Line-item key (Shipment · Invoice · Material) — matches reports._reco_key
         # so a ticked row excludes exactly that line, not the whole shipment.
@@ -1568,45 +1574,77 @@ elif page == "Summary Report":
                             frame["Invoice No"].astype(str),
                             frame["Material"].astype(str)))
 
+        _reco_dec = db.reco_review_decisions()      # {key: Exclude bool} from store
+        _known = set(_reco_dec.keys())              # keys reviewed in an earlier save
+        _reco_disabled = ["Vertical", "Shipment ID", "Invoice No", "Vendor Invoice No",
+                          "Date", "Supplier Name", "Buyer Name", "Material", "Amount",
+                          "Purchase Price", "Missing Side"]
+
         def _render_reco_review(suffix=""):
             st.markdown("### 🧾 Reco Items — manual review (all verticals)")
+            _w = st.session_state.pop("reco_save_warn", None)
+            if _w:
+                st.warning(f"Saved on this server, but GitHub sync failed: {_w} — the "
+                           "decision may reset on restart.")
             if not len(_cand):
                 st.info("No shipments are missing a bill or invoice side in the current "
                         "data — every line item has both a purchase and a sale matched. "
                         "Nothing to review.")
                 return
             st.caption("Each row is one **line item** (Shipment · Invoice · Material) whose "
-                       "**bill side or invoice side is missing** (see *Missing Side*). Tick a "
-                       "row to **keep it in Reco Items** — that exact line is excluded from the "
-                       "Details & summary. Unticked lines are **included**. Click **Save** to "
-                       "(re)compute the summary.")
+                       "**bill side or invoice side is missing**. Tick a row to **keep it in "
+                       "Reco Items** — that line is excluded from the Details & summary. "
+                       "Decisions are **saved and remembered** across uploads.")
             _verts = sorted(_cand["Vertical"].unique())
             _pick = st.multiselect("Filter by vertical", _verts, default=_verts,
                                    key=f"reco_vert_filter{suffix}")
-            _prev = st.session_state.get("reco_selected", set())
-            _ed = _cand[_cand["Vertical"].isin(_pick)].copy()
-            _ed["Reco? (exclude)"] = [k in _prev for k in _rk(_ed)]
-            _res = st.data_editor(
-                _ed, hide_index=True, use_container_width=True, key=f"reco_editor{suffix}",
-                disabled=["Vertical", "Shipment ID", "Invoice No", "Date", "Buyer Name",
-                          "Material", "Amount", "Purchase Price", "Missing Side"])
+            _view = _cand[_cand["Vertical"].isin(_pick)].copy()
+            _view["_isnew"] = [k not in _known for k in _rk(_view)]
+            _new_df, _prev_df = _view[_view["_isnew"]], _view[~_view["_isnew"]]
+            _parts = []
+            if len(_new_df):
+                st.markdown(":red[**🆕 New MIS shipments — review these**]")
+                st.caption("Not seen in earlier uploads. Tick to exclude; **Save** moves them "
+                           "into *Previously stored*.")
+                _nd = _new_df.drop(columns="_isnew").copy()
+                _nd["Reco? (exclude)"] = False
+                _parts.append(st.data_editor(_nd, hide_index=True, use_container_width=True,
+                                             key=f"reco_new{suffix}", disabled=_reco_disabled))
+            if len(_prev_df):
+                st.markdown(":blue[**📁 Previously stored MIS shipments**]")
+                st.caption("Reviewed in an earlier save — change any decision and Save again.")
+                _pd2 = _prev_df.drop(columns="_isnew").copy()
+                _pd2["Reco? (exclude)"] = [_reco_dec.get(k, False) for k in _rk(_pd2)]
+                _parts.append(st.data_editor(_pd2, hide_index=True, use_container_width=True,
+                                             key=f"reco_prev{suffix}", disabled=_reco_disabled))
             if st.button("💾 Save & compute summary", key=f"reco_save{suffix}"):
-                # Keep prior ticks for line items hidden by the vertical filter;
-                # update only the rows shown in the editor.
-                _keys = _rk(_res)
-                _shown = set(_keys)
-                _picked = {k for k, tick in zip(_keys, _res["Reco? (exclude)"]) if tick}
-                st.session_state["reco_selected"] = (_prev - _shown) | _picked
-                st.session_state["reco_sig"] = _sig
+                _shown = {}
+                for _p in _parts:
+                    for _k, _t in zip(_rk(_p), _p["Reco? (exclude)"]):
+                        _shown[_k] = bool(_t)
+                # persist a decision for EVERY current candidate (so all become
+                # 'known' → the gate clears), using the shown tick, else the prior
+                # stored choice, else False.
+                _rows = []
+                for _, _r in _cand.iterrows():
+                    _k = (str(_r["Shipment ID"]), str(_r["Invoice No"]), str(_r["Material"]))
+                    _rows.append({"Shipment ID": _r["Shipment ID"], "Invoice No": _r["Invoice No"],
+                                  "Material": _r["Material"], "Vertical": _r["Vertical"],
+                                  "Exclude": _shown.get(_k, _reco_dec.get(_k, False))})
+                db.save_reco_review(pd.DataFrame(_rows))
+                if db.LAST_SYNC_OK is False:
+                    st.session_state["reco_save_warn"] = db.LAST_SYNC_ERR
                 st.rerun()
 
-        _reco_ready = (len(_cand) == 0) or (st.session_state.get("reco_sig") == _sig)
-        if not _reco_ready:
-            st.warning(f"{len(_cand)} line item(s) are missing a bill or invoice side — "
-                       "review below, then **Save** to compute the summary.")
+        # Gate the summary only while there are UNSAVED new shipments.
+        _cur_keys = _rk(_cand) if len(_cand) else []
+        _n_new = sum(1 for k in _cur_keys if k not in _known)
+        if _n_new:
+            st.warning(f"{_n_new} NEW shipment(s) in this MIS need review — tick as needed "
+                       "and **Save** (they'll be remembered afterwards).")
             _render_reco_review()
             st.stop()
-        reco_ships = st.session_state.get("reco_selected", set()) if len(_cand) else set()
+        reco_ships = {k for k in _cur_keys if _reco_dec.get(k, False)}
 
         # ── ENTERPRISE manual inputs (after Reco review) ────────────────────
         # 1) Custom Duty bills: shipments with NO bill/invoice side in Zoho,
@@ -1670,28 +1708,113 @@ elif page == "Summary Report":
 
         # ── Manual line items — ANY vertical (added to Details + calculation) ─
         _ml_store = db.load_manual_lines()
-        _ml_cols = reports.MANUAL_LINES_COLS
+        _ml_cols = reports.MANUAL_LINES_COLS + reports.MANUAL_META_COLS
         _ml_numset = {lbl for lbl, _p, _d in reports.MANUAL_INPUT_FIELDS if _d in ("num", "qty")}
+        # live line-item keys in the CURRENT Details (pre-manual) → to flag which
+        # stored entries would OVERRIDE a live line if applied.
+        _live_keys = set(zip(profit_df.iloc[:, 3].astype(str).str.strip(),
+                             profit_df.iloc[:, 39].astype(str).str.strip(),
+                             profit_df.iloc[:, 12].astype(str).str.strip())) \
+            if profit_df.shape[1] > 39 else set()
         with st.expander(f"➕ Manual line items — any vertical ({len(_ml_store)} stored)"):
-            st.caption("Add a full Details line item to **any vertical**. You fill the **raw "
-                       "input** columns; the engine computes every derived column (Purchase "
-                       "Price, Amount, Net Qty, Total Cost, Net Revenue, Margins, GST, …) in "
-                       "real time. **No CN/DN provision** is applied — entries are final. "
-                       "**Qty Unit** picks how the quantities are read: *Display* = MT for "
-                       "weight verticals / units for IT AD·Re-Commerce·M4, or *Kg* for raw Kg. "
-                       "Enterprise vs Processing Center is decided by the Shipment ID "
-                       "(SH… → Enterprise). Rows **stay stored** until edited. Date: any format.")
+            st.caption("Add / change a full Details line item for **any vertical**. Fill the raw "
+                       "input columns (engine computes Purchase/Amount/Net Qty/Total Cost/Net "
+                       "Revenue/Margins/GST); **no CN/DN provision** applied. Write a **Reason** "
+                       "for each change. **Apply** = use this stored entry for this MIS: if it "
+                       "matches a live line (see *Matches live?*) ticking Apply **replaces** the "
+                       "live line with your version; unticking keeps the live line. Non-matching "
+                       "entries are additions. Rows **stay stored** until edited.")
             st.caption(_durability_note)
             st.caption("**Formats** — **Date** columns: `YYYY-MM-DD` or `DD-MM-YYYY` "
                        "(e.g. `2026-07-05` or `05-07-2026`). **Amounts / rates**: plain "
                        "numbers, no ₹ or commas (e.g. `150000`). **Quantity** columns: the "
                        "number is read in the unit picked in **Qty Unit**. Required per row: "
                        "**Vertical** + **Date** + at least one number.")
+
+            # ── Fetch an existing line item to edit/override (optional) ─────────
+            _ml_prefill = st.session_state.get("ml_prefill", [])
+            st.markdown("**🔍 Fetch an existing line item to edit** (optional)")
+            st.caption("Enter a Shipment ID; the engine lists every line item it has in the "
+                       "Details. Load one into the editor below, change any column, and Save — "
+                       "your edit **replaces** that line item (no double-count).")
+            _fc1, _fc2 = st.columns([3, 1])
+            _fsid = _fc1.text_input("Shipment ID to fetch", key="ml_fetch_sid",
+                                    label_visibility="collapsed", placeholder="Shipment ID")
+            if _fc2.button("🔍 Fetch", key="ml_fetch_btn"):
+                if _fsid.strip():
+                    _dv = db.profit_details_view(profit_df)
+                    _hit = _dv[_dv.iloc[:, 3].astype(str).str.strip() == _fsid.strip()]
+                    st.session_state["ml_fetch_hits"] = _hit.reset_index(drop=True)
+                else:
+                    st.session_state.pop("ml_fetch_hits", None)
+            _hits = st.session_state.get("ml_fetch_hits")
+            if _hits is not None and len(_hits):
+                _disp = pd.DataFrame({
+                    "Invoice No": _hits.iloc[:, 39].astype(str),
+                    "Material": _hits.iloc[:, 12].astype(str),
+                    "Supplier": _hits.iloc[:, 4].astype(str),
+                    "Vertical": _hits.iloc[:, 85].astype(str).map(reports._canon_label),
+                    "Amount": pd.to_numeric(_hits.iloc[:, 48], errors="coerce"),
+                    "Purchase Price": pd.to_numeric(_hits.iloc[:, 15], errors="coerce"),
+                })
+                st.dataframe(_disp, hide_index=True, use_container_width=True)
+                _opts = [f"{i}: {_disp['Invoice No'][i]} · {_disp['Material'][i]}"
+                         for i in range(len(_disp))]
+                _pick = st.selectbox("Pick a line item to load into the editor", _opts,
+                                     key="ml_fetch_pick")
+                if st.button("⬇ Load into editor", key="ml_fetch_load"):
+                    _row = _hits.iloc[int(_pick.split(":")[0])]
+                    _pre = {}
+                    for _lbl, _pos, _dk in reports.MANUAL_INPUT_FIELDS:
+                        if _lbl == "Vertical":
+                            _cv = reports._canon_label(str(_row.iloc[85]).strip())
+                            if _cv == "Institutional Business":
+                                _cv = ("Enterprise" if str(_row.iloc[3]).strip().upper().startswith("SH")
+                                       else "Processing Center")
+                            _pre[_lbl] = _cv
+                        elif _lbl == "Qty Unit":
+                            _pre[_lbl] = "Kg"                       # fetched qtys are raw Kg
+                        elif _pos is not None and _pos < _hits.shape[1]:
+                            _v = _row.iloc[_pos]
+                            _pre[_lbl] = ("" if pd.isna(_v) else _v)
+                        else:
+                            _pre[_lbl] = None
+                    _ml_prefill.append(_pre)
+                    st.session_state["ml_prefill"] = _ml_prefill
+                    st.session_state.pop("ml_fetch_hits", None)
+                    st.rerun()
+            elif _hits is not None:
+                st.caption("No line items found for that Shipment ID in the Details.")
+
             _ml_seed = _ml_store if not _ml_store.empty else pd.DataFrame(
                 {c: pd.Series(dtype=("float" if c in _ml_numset else "str")) for c in _ml_cols})
+            if _ml_prefill:   # loaded-from-fetch rows appended for editing before save
+                _ml_seed = pd.concat([_ml_seed, pd.DataFrame(_ml_prefill).reindex(columns=_ml_cols)],
+                                     ignore_index=True)
+            _ml_seed = _ml_seed.reindex(columns=_ml_cols).copy()
+            # metadata defaults
+            _ml_seed["Reason"] = _ml_seed["Reason"].astype("object") if "Reason" in _ml_seed else ""
+            _ml_seed["Reason"] = _ml_seed["Reason"].where(_ml_seed["Reason"].notna(), "")
+            _ml_seed["Apply"] = _ml_seed["Apply"].map(lambda x: True if pd.isna(x) else bool(x)) \
+                if "Apply" in _ml_seed else True
+            # 'Matches live?' — does this entry's Shipment·Invoice·Material hit a live line?
+            _ml_seed.insert(0, "Matches live?", [
+                (str(s).strip(), str(i).strip(), str(m).strip()) in _live_keys
+                for s, i, m in zip(_ml_seed.get("Shipment ID", ""),
+                                   _ml_seed.get("Inv. No.", ""),
+                                   _ml_seed.get("Material", ""))] if len(_ml_seed) else [])
             # per-column type + format tooltip, driven by each field's dtype
             _ml_dtypes = {lbl: d for lbl, _p, d in reports.MANUAL_INPUT_FIELDS}
             _ml_colcfg = {
+                "Matches live?": st.column_config.CheckboxColumn(
+                    "Matches live?", help="This entry's Shipment·Invoice·Material matches a live "
+                    "line in this MIS — ticking Apply replaces that live line with your version."),
+                "Apply": st.column_config.CheckboxColumn(
+                    "Apply", default=True, help="Use this stored entry for THIS MIS. If it matches "
+                    "a live line, Apply replaces the live line with your version; untick to keep "
+                    "the live line. Non-matching entries are added."),
+                "Reason": st.column_config.TextColumn(
+                    "Reason", help="Why this line was added / changed (for audit)."),
                 "Vertical": st.column_config.SelectboxColumn(
                     "Vertical", options=reports.MANUAL_VERTICAL_OPTIONS, required=True,
                     help="Which vertical this line belongs to (Enterprise/Processing Center "
@@ -1715,18 +1838,40 @@ elif page == "Summary Report":
                 elif _dk == "date":
                     _ml_colcfg[_lbl] = st.column_config.TextColumn(
                         _lbl, help="Date — YYYY-MM-DD or DD-MM-YYYY (e.g. 2026-07-05).")
+            # key includes the prefill count so a freshly-loaded fetch row re-inits
+            # the editor and shows up (Streamlit keeps data_editor state by key).
             _ml_res = st.data_editor(
-                _ml_seed, num_rows="dynamic", use_container_width=True, key="ml_editor",
-                column_config=_ml_colcfg)
+                _ml_seed, num_rows="dynamic", use_container_width=True,
+                key=f"ml_editor_{len(_ml_prefill)}", column_config=_ml_colcfg,
+                disabled=["Matches live?"])
             _m2 = st.session_state.pop("ml_save_msg", None)
             if _m2:
                 (st.warning if "⚠" in _m2 else st.success)(_m2)
             if st.button("💾 Save manual line items", key="ml_save"):
-                _n = db.save_manual_lines(_ml_res)
+                _n = db.save_manual_lines(_ml_res.drop(columns=["Matches live?"], errors="ignore"))
                 st.session_state["ml_save_msg"] = _save_feedback(_n, "manual line item(s)")
+                st.session_state.pop("ml_prefill", None)          # loaded rows now stored
                 st.rerun()
         if not _ml_store.empty:
             profit_df = reports.inject_manual_line_items(profit_df, _ml_store)
+
+        # ── Last Year Shipments — CN/DN left behind from Details (preview) ────
+        if _cn is not None or _dn is not None:
+            _lb = reports.last_year_left_behind(profit_df, _cn, _dn)
+            with st.expander(f"🗂️ Last Year Shipments — {len(_lb)} CN/DN left behind "
+                             "(shipment not in Details)"):
+                st.caption("Credit/Debit notes (from the MIS **CN & DN sheets**) whose shipment "
+                           "has **no row in the current Details** — typically last-year shipments "
+                           "still receiving CN/DN. Vertical is read from each note's **Account** "
+                           "column. Included as a **'Last Year Shipments'** sheet in every "
+                           "downloaded workbook.")
+                if len(_lb):
+                    _lbsum = (_lb.groupby(["Vertical", "Type"], as_index=False)
+                              .agg(Rows=("Amount", "size"), Amount=("Amount", "sum")))
+                    st.dataframe(_lbsum, hide_index=True, use_container_width=True)
+                    st.dataframe(_lb, hide_index=True, use_container_width=True, height=360)
+                else:
+                    st.info("No left-behind CN/DN — every note's shipment is in the Details.")
 
         _ent_oc = db.load_enterprise_opcost()
         with st.expander(f"⚙️ Enterprise — Operational Cost overrides ({len(_ent_oc)} month(s) stored)"):
@@ -1860,7 +2005,7 @@ elif page == "Summary Report":
                         _wb_v = reports.combined_workbook(
                             summaries, _sel_pdf, _ar, _ap, vertical=name, reco_ships=reco_ships,
                             rc_ns_summary=_rc_ns if name == "Re-Commerce" else None,
-                            op_cost_bills=_obills, acct_txn_df=_atxn)
+                            op_cost_bills=_obills, acct_txn_df=_atxn, cn_df=_cn, dn_df=_dn)
                         st.download_button(
                             f"⬇ Download {name} (Excel — Summary · Receivables · Payables · Report)",
                             _wb_v, file_name=f"profitability_{safe}.xlsx",
@@ -1892,7 +2037,7 @@ elif page == "Summary Report":
                 _s = summaries if _lbl == _sel else _build(_pdf)
                 _wb_all = reports.combined_workbook(_s, _pdf, _ar, _ap, reco_ships=reco_ships,
                                                     rc_ns_summary=_rc_ns, op_cost_bills=_obills,
-                                                    acct_txn_df=_atxn)
+                                                    acct_txn_df=_atxn, cn_df=_cn, dn_df=_dn)
                 st.download_button(
                     f"⬇ Download ALL Verticals{_sfx} (Excel — Summary · Receivables · Payables · Report)",
                     _wb_all, file_name=_fn,
@@ -1960,7 +2105,7 @@ elif page == "Summary Report":
                             continue
                         _wb = reports.combined_workbook(_s, _pdf, _ar, _ap, vertical=_v, reco_ships=reco_ships,
                                                         rc_ns_summary=_rc_ns if _v == "Re-Commerce" else None,
-                                                        op_cost_bills=_obills, acct_txn_df=_atxn)
+                                                        op_cost_bills=_obills, acct_txn_df=_atxn, cn_df=_cn, dn_df=_dn)
                         _rcpts = only_to or _rbv.get(_v, _base_to)
                         _safe = _v.replace("(", "_").replace(")", "").replace("/", "-").replace(" ", "_")
                         _vbody = _body.replace("Profitability Report", f"Profitability Report - {_v}")
@@ -1972,7 +2117,7 @@ elif page == "Summary Report":
                 else:
                     _wb = reports.combined_workbook(_s, _pdf, _ar, _ap, reco_ships=reco_ships,
                                                     rc_ns_summary=_rc_ns, op_cost_bills=_obills,
-                                                    acct_txn_df=_atxn)
+                                                    acct_txn_df=_atxn, cn_df=_cn, dn_df=_dn)
                     _ok, _msg = _mailer.send_report(
                         only_to or _base_to, f"{_subj}{_vsfx}", _body, _wb,
                         f"profitability_all{_fsfx}.xlsx", _cfg,

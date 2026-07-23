@@ -490,12 +490,12 @@ def _parse_date_flex(s) -> pd.Series:
 
 
 def _manual_lines_cols() -> list:
-    """Canonical column order — the raw-input fields defined in reports."""
+    """Canonical column order — the raw-input fields + metadata (Reason, Apply)."""
     try:
         import reports
-        return list(reports.MANUAL_LINES_COLS)
+        return list(reports.MANUAL_LINES_COLS) + list(reports.MANUAL_META_COLS)
     except Exception:
-        return ["Vertical", "Qty Unit", "Date"]
+        return ["Vertical", "Qty Unit", "Date", "Reason", "Apply"]
 
 
 def save_manual_lines(df: pd.DataFrame) -> int:
@@ -525,6 +525,11 @@ def save_manual_lines(df: pd.DataFrame) -> int:
     d = d[ok].reset_index(drop=True)
     if len(d):
         d["Date"] = ddt[ok].dt.strftime("%Y-%m-%d").values       # canonical
+        if "Apply" in d.columns:                                 # default True
+            d["Apply"] = d["Apply"].map(lambda x: True if pd.isna(x) else bool(x))
+        if "Reason" in d.columns:
+            d["Reason"] = (d["Reason"].astype(str)
+                           .replace({"nan": "", "None": "", "NaN": ""}))
     return _save_small(d, MANUAL_LINES_PATH,
                        sync_msg="Update manual Details line items (app entry)")
 
@@ -541,6 +546,66 @@ def load_manual_lines() -> pd.DataFrame:
 
 def manual_lines_count() -> int:
     return len(load_manual_lines())
+
+
+# ── Reco-review decisions (persistent) ────────────────────────────────────────
+# Remembers, per line-item key (Shipment ID · Invoice No · Material), whether the
+# user chose to EXCLUDE it (keep it in Reco Items). Persisted so a re-upload of the
+# MIS shows previously-reviewed shipments with their prior decision, and only
+# never-seen shipments appear as NEW. GitHub-synced. Kept until changed.
+RECO_REVIEW_PATH = PERSIST_DIR / "reco_review.parquet"
+RECO_REVIEW_COLS = ["Shipment ID", "Invoice No", "Material", "Vertical", "Exclude"]
+
+
+def _reco_review_key(df: pd.DataFrame) -> pd.Series:
+    return (df["Shipment ID"].astype(str).str.strip() + "||"
+            + df["Invoice No"].astype(str).str.strip() + "||"
+            + df["Material"].astype(str).str.strip())
+
+
+def save_reco_review(rows: pd.DataFrame) -> int:
+    """UPSERT the given decisions into the store by (Shipment·Invoice·Material).
+    Decisions for keys not in `rows` are retained (so dropped-out shipments keep
+    their prior choice). `rows` columns: RECO_REVIEW_COLS (Exclude = bool)."""
+    if rows is None or getattr(rows, "empty", True):
+        return reco_review_count()
+    new = rows.copy()
+    new.columns = [str(c) for c in new.columns]
+    new = new.reindex(columns=RECO_REVIEW_COLS)
+    new["Exclude"] = new["Exclude"].fillna(False).astype(bool)
+    cur = _load_small(RECO_REVIEW_PATH)
+    if not cur.empty:
+        cur = cur.reindex(columns=RECO_REVIEW_COLS)
+        keep = cur[~_reco_review_key(cur).isin(set(_reco_review_key(new)))]
+        out = pd.concat([keep, new], ignore_index=True)
+    else:
+        out = new
+    return _save_small(out, RECO_REVIEW_PATH,
+                       sync_msg="Update Reco-review decisions (app entry)")
+
+
+def load_reco_review() -> pd.DataFrame:
+    d = _load_small(RECO_REVIEW_PATH)
+    if d.empty:
+        return pd.DataFrame(columns=RECO_REVIEW_COLS)
+    return d.reindex(columns=RECO_REVIEW_COLS)
+
+
+def reco_review_decisions() -> dict:
+    """{(Shipment ID, Invoice No, Material): Exclude bool} from the store."""
+    d = load_reco_review()
+    if d.empty:
+        return {}
+    out = {}
+    for _, r in d.iterrows():
+        k = (str(r["Shipment ID"]).strip(), str(r["Invoice No"]).strip(),
+             str(r["Material"]).strip())
+        out[k] = bool(r["Exclude"])
+    return out
+
+
+def reco_review_count() -> int:
+    return len(load_reco_review())
 
 
 # ── Accumulated profitability-details store (permanent) ──────────────────────

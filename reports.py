@@ -167,6 +167,9 @@ MANUAL_INPUT_FIELDS = [
     ("Cash Discount. No", 102, "text"), ("CD Date", 103, "date"), ("SD", 104, "text"),
 ]
 MANUAL_LINES_COLS = [lbl for lbl, _p, _d in MANUAL_INPUT_FIELDS]
+# Metadata columns (NOT Details columns): why the change was made, and whether to
+# apply this stored entry to the current MIS (override the live line / add it).
+MANUAL_META_COLS = ["Reason", "Apply"]
 MANUAL_QTY_UNIT_OPTIONS = ["Display (MT / units)", "Kg"]
 MANUAL_VERTICAL_OPTIONS = ["End Generator", "Plastic", "Re-Commerce", "ReWerse",
                            "AFR", "M4", "IT AD", "Enterprise", "Processing Center"]
@@ -375,6 +378,12 @@ def inject_manual_line_items(profit_df: pd.DataFrame, ml: pd.DataFrame) -> pd.Da
 
     rows = []
     for i in range(len(ml)):
+        # 'Apply' toggle: skip stored entries the user chose NOT to apply to this
+        # MIS (keep the live line instead). Default True (blank/absent = apply).
+        if "Apply" in ml.columns:
+            _ap = ml.iloc[i]["Apply"]
+            if not (True if pd.isna(_ap) else bool(_ap)):
+                continue
         rec = {lbl: (ml.iloc[i][lbl] if lbl in ml.columns else None)
                for lbl, _p, _d in MANUAL_INPUT_FIELDS}
         vert = str(rec.get("Vertical", "")).strip()
@@ -447,7 +456,20 @@ def inject_manual_line_items(profit_df: pd.DataFrame, ml: pd.DataFrame) -> pd.Da
         rows.append(r)
     if not rows:
         return profit_df
-    return pd.concat([profit_df, pd.DataFrame(rows, columns=cols)], ignore_index=True)
+    manual = pd.DataFrame(rows, columns=cols)
+    # OVERRIDE: a manual row with a NON-BLANK Shipment ID whose (Shipment·Invoice·
+    # Material) matches an existing computed line item REPLACES it — drop the
+    # original so it isn't double-counted (the fetch-and-edit flow). Blank-shipment
+    # manual rows are pure additions and never override.
+    _okeys = {(str(r[cols[3]]).strip(), str(r[cols[39]]).strip(), str(r[cols[12]]).strip())
+              for r in rows if str(r[cols[3]]).strip()}
+    if _okeys:
+        _pk = list(zip(profit_df.iloc[:, 3].astype(str).str.strip(),
+                       profit_df.iloc[:, 39].astype(str).str.strip(),
+                       profit_df.iloc[:, 12].astype(str).str.strip()))
+        _keep = pd.Series([k not in _okeys for k in _pk], index=profit_df.index)
+        profit_df = profit_df[_keep]
+    return pd.concat([profit_df, manual], ignore_index=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -901,6 +923,75 @@ def apply_recommerce_manual(base_df: pd.DataFrame,
     return pd.concat([base_df[keep], m], ignore_index=True)
 
 
+LAST_YEAR_COLS = ["Vertical", "Type", "SO Number", "Date", "Note Number", "Party", "Amount"]
+
+
+def last_year_left_behind(profit_df: pd.DataFrame,
+                          cn_df: pd.DataFrame | None,
+                          dn_df: pd.DataFrame | None) -> pd.DataFrame:
+    """CN & DN (from the MIS CN and DN sheets) whose shipment (Reference#) is NOT
+    in the current Details — i.e. SKIPPED when forming Details for this MIS. The
+    vertical is read from each note's own **Account** column (e.g. 'Marketplace
+    Sales (Metal)' → End Generator). Returns a DataFrame (LAST_YEAR_COLS) sorted
+    by Vertical, Type. Void notes excluded; a note referencing a comma-list of
+    shipments is left behind only if NONE of them are in Details."""
+    det: set = set()
+    if profit_df is not None and not getattr(profit_df, "empty", True) and profit_df.shape[1] > 3:
+        for s in profit_df.iloc[:, 3].astype(str):
+            for p in str(s).split(","):
+                p = p.strip()
+                if p and p.lower() not in ("nan", "none", "nat"):
+                    det.add(p)
+
+    def _is_left(v):
+        ships = [p.strip() for p in str(v).split(",") if p.strip()]
+        return bool(ships) and not any(p in det for p in ships)
+
+    def _extract(df, typ, date_names, num_names, party_names, status_names):
+        if df is None or getattr(df, "empty", True):
+            return pd.DataFrame(columns=LAST_YEAR_COLS)
+        low = {str(c).strip().lower(): c for c in df.columns}
+        def col(*names):
+            for n in names:
+                if n.lower() in low:
+                    return low[n.lower()]
+            return None
+        ref = col("reference#", "referenceno", "reference no", "reference number", "cf.so number")
+        if ref is None:
+            return pd.DataFrame(columns=LAST_YEAR_COLS)
+        acc = col("account"); dtc = col(*date_names); numc = col(*num_names)
+        prc = col(*party_names); subc = col("subtotal", "amount"); stc = col(*status_names)
+        m = df[ref].map(_is_left)
+        if stc is not None:
+            m = m & ~df[stc].astype(str).str.strip().str.lower().eq("void")
+        sub = df[m]
+        if sub.empty:
+            return pd.DataFrame(columns=LAST_YEAR_COLS)
+        _tok = (sub[acc].astype(str).str.extract(r"\((.*?)\)", expand=False).fillna("").str.strip()
+                if acc else pd.Series("", index=sub.index))
+        _vert = _tok.map(lambda t: _canon_label(t) if t else "(other business lines)")
+        return pd.DataFrame({
+            "Vertical": _vert.values,
+            "Type": typ,
+            "SO Number": sub[ref].astype(str).str.strip().values,
+            "Date": (pd.to_datetime(sub[dtc], errors="coerce").dt.strftime("%Y-%m-%d").values
+                     if dtc else ""),
+            "Note Number": (sub[numc].astype(str).values if numc else ""),
+            "Party": (sub[prc].astype(str).values if prc else ""),
+            "Amount": (pd.to_numeric(sub[subc], errors="coerce").fillna(0.0).values if subc else 0.0),
+        })
+
+    dn = _extract(dn_df, "DN", ("vendor credit date", "debit note date"),
+                  ("vendor credit number", "debit note number"),
+                  ("vendor name",), ("vendor credit status", "status"))
+    cn = _extract(cn_df, "CN", ("credit note date",), ("credit note number",),
+                  ("customer name",), ("credit note status", "status"))
+    out = pd.concat([dn, cn], ignore_index=True)
+    if out.empty:
+        return pd.DataFrame(columns=LAST_YEAR_COLS)
+    return out.sort_values(["Vertical", "Type", "SO Number"], ignore_index=True)
+
+
 RC_NS_LABEL = "Re-Commerce (Without Samsung)"
 
 
@@ -963,8 +1054,9 @@ def reco_candidates(profit_df: pd.DataFrame) -> pd.DataFrame:
     Positional: 2=Date, 3=Shipment ID, 12=Material, 15=Purchase Price,
     39=Inv. No., 41=Buyer Name, 48=Amount, 85=Broad Category (Vertical)."""
     mask = _itad_reco_mask(profit_df)
-    cols = ["Vertical", "Shipment ID", "Invoice No", "Date", "Buyer Name",
-            "Material", "Amount", "Purchase Price", "Missing Side"]
+    cols = ["Vertical", "Shipment ID", "Invoice No", "Vendor Invoice No", "Date",
+            "Supplier Name", "Buyer Name", "Material", "Amount", "Purchase Price",
+            "Missing Side"]
     if not mask.any():
         return pd.DataFrame(columns=cols)
     sub = profit_df[mask]
@@ -976,6 +1068,8 @@ def reco_candidates(profit_df: pd.DataFrame) -> pd.DataFrame:
     g = pd.DataFrame({
         "Vertical": sub.iloc[:, 85].astype(str).str.strip().map(_canon_label),
         "Shipment ID": _ship_s,
+        "Supplier Name": sub.iloc[:, 4].astype(str),          # bill vendor
+        "Vendor Invoice No": sub.iloc[:, 6].astype(str),      # bill number
         # Blank-shipment charge lines (e.g. Hydra) carry no shipment id to link a
         # purchase to its sale, so the same material shows up as two rows (orphan
         # bill + orphan invoice). Collapse them by material ONLY (invoice grain
@@ -995,8 +1089,10 @@ def reco_candidates(profit_df: pd.DataFrame) -> pd.DataFrame:
     # blank-shipment rows Invoice No is blanked above, so a material's bill+invoice
     # legs merge into a single line item.
     out = (g.groupby(["Shipment ID", "Invoice No", "Material"], as_index=False)
-             .agg({"Vertical": "first", "Date": "first", "Buyer Name": "first",
-                   "Amount": "sum", "Purchase Price": "sum",
+             .agg({"Vertical": "first", "Date": "first",
+                   "Supplier Name": lambda x: _uniq_join(x),
+                   "Vendor Invoice No": lambda x: _uniq_join(x),
+                   "Buyer Name": "first", "Amount": "sum", "Purchase Price": "sum",
                    "Missing Side": lambda x: _uniq_join(x) or "Bill (purchase) missing"}))[cols]
     # A merged blank-shipment line that now carries BOTH a sale and a purchase is
     # COMPLETE — its bill and invoice legs found each other by material, so nothing
@@ -2016,7 +2112,9 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
                       reco_ships: set | None = None,
                       rc_ns_summary: pd.DataFrame | None = None,
                       op_cost_bills: pd.DataFrame | None = None,
-                      acct_txn_df: pd.DataFrame | None = None) -> bytes:
+                      acct_txn_df: pd.DataFrame | None = None,
+                      cn_df: pd.DataFrame | None = None,
+                      dn_df: pd.DataFrame | None = None) -> bytes:
     """One Excel with four stacked sheets — Summary, Receivables, Payables,
     Details (the profitability report). If `vertical` is given, everything is
     filtered to it; otherwise all verticals are included (stacked by type).
@@ -2437,6 +2535,48 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
             _headers.append(("Buyer Metrics", 1))
         except Exception:
             pass    # metrics are additive extras — never block the workbook
+
+        # ── Sheet: Last Year Shipments — CN/DN left behind from Details ──────
+        # Notes (from the MIS CN & DN sheets) whose shipment isn't in the current
+        # Details — last-year shipments still receiving CN/DN. Vertical from each
+        # note's Account column. Per-Vertical×Type subtotals + detail. Data only.
+        if cn_df is not None or dn_df is not None:
+            try:
+                _lb = last_year_left_behind(profit_df, cn_df, dn_df)
+                # Per-vertical workbook → only THAT vertical's left-behind notes.
+                if vertical and len(_lb):
+                    _vt = "".join(c for c in str(vertical).lower() if c.isalnum())
+                    def _vmatch(v):
+                        vv = "".join(c for c in str(v).lower() if c.isalnum())
+                        if _vt in ("enterprise", "processingcenter"):
+                            return vv in ("institutionalbusiness", "ib", "enterprise", "processingcenter")
+                        if _vt in ("itad", "itassetsdisposition"):
+                            return vv in ("itad", "itassetsdisposition", "itassets")
+                        return vv == _vt
+                    _lb = _lb[_lb["Vertical"].map(_vmatch)].reset_index(drop=True)
+                _shn, _r = "Last Year Shipments", 0
+                if len(_lb):
+                    _detcols = ["Type", "SO Number", "Date", "Note Number", "Party", "Amount"]
+                    # one SEPARATE block per vertical: header · its notes · subtotal
+                    for _v in sorted(_lb["Vertical"].astype(str).unique()):
+                        _vb = _lb[_lb["Vertical"].astype(str) == _v]
+                        pd.DataFrame([[f"■ {_v}  ({len(_vb)} note(s))"]]).to_excel(
+                            w, sheet_name=_shn, startrow=_r, startcol=0, index=False, header=False)
+                        _headers.append((_shn, _r + 1)); _r += 1
+                        _vb[_detcols].to_excel(w, sheet_name=_shn, startrow=_r, index=False)
+                        _headers.append((_shn, _r + 1)); _r += len(_vb) + 1
+                        pd.DataFrame([["Subtotal", "", "", "", "", round(_vb["Amount"].sum(), 2)]]) \
+                            .to_excel(w, sheet_name=_shn, startrow=_r, startcol=0, index=False, header=False)
+                        _r += 3          # blank row gap before the next vertical
+                    pd.DataFrame([["GRAND TOTAL", "", "", "", "", round(_lb["Amount"].sum(), 2)]]) \
+                        .to_excel(w, sheet_name=_shn, startrow=_r, startcol=0, index=False, header=False)
+                    _headers.append((_shn, _r + 1))
+                else:
+                    pd.DataFrame([["No left-behind CN/DN — every note's shipment is in Details."]]) \
+                        .to_excel(w, sheet_name=_shn, startrow=0, startcol=0, index=False, header=False)
+                    _headers.append((_shn, 1))
+            except Exception:
+                pass    # additive extra — never block the workbook
 
         # ── Sheet 7: Column Guide — every report column's side/GST/meaning ───
         pd.DataFrame(COLUMN_GUIDE,

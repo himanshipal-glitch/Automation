@@ -335,18 +335,50 @@ def _save_small(df: pd.DataFrame, path, sync_msg: str | None = None) -> int:
     except Exception:
         written = path.with_suffix(".pkl")
         df.to_pickle(written)
+    _DF_MEMO.pop(str(written), None)          # force a reload on the next read
     LAST_SYNC_OK = _github_writethrough(written, sync_msg) if sync_msg else None
     return len(df)
+
+
+# ── mtime-keyed read cache ────────────────────────────────────────────────────
+# The Summary path re-reads the same persistent stores many times per rerun (each
+# workbook build re-loads profit_details + the small stores). Reading is a pure
+# function of the file's bytes, so memoize by (mtime_ns, size): a rerun that didn't
+# change a file returns the parsed frame instantly, and the instant _save_small
+# rewrites a file its mtime changes and the next read reloads. A COPY is returned
+# so callers can mutate freely without corrupting the cached frame. Keyed on the
+# on-disk signature only — never on time — so a cached frame is byte-identical to
+# re-reading the file. Module-global (shared across sessions), which is correct:
+# the files are shared on disk, so all sessions would read the same bytes anyway.
+_DF_MEMO: dict = {}
+
+
+def _read_df(pp):
+    """Read one parquet/pkl file into a DataFrame, memoized by (mtime_ns, size).
+    Returns a COPY, or None if the file is missing/unreadable."""
+    key = str(pp)
+    try:
+        stt = pp.stat()
+    except OSError:
+        return None
+    sig = (stt.st_mtime_ns, stt.st_size)
+    hit = _DF_MEMO.get(key)
+    if hit is not None and hit[0] == sig:
+        return hit[1].copy()
+    try:
+        df = (pd.read_parquet(pp) if pp.suffix == ".parquet" else pd.read_pickle(pp))
+    except Exception:
+        return None
+    _DF_MEMO[key] = (sig, df)
+    return df.copy()
 
 
 def _load_small(path) -> pd.DataFrame:
     for pp in (path, path.with_suffix(".pkl")):
         if pp.exists():
-            try:
-                return (pd.read_parquet(pp) if pp.suffix == ".parquet"
-                        else pd.read_pickle(pp))
-            except Exception:
-                pass
+            df = _read_df(pp)
+            if df is not None:
+                return df
     return pd.DataFrame()
 
 
@@ -712,18 +744,19 @@ def upsert_profit_details(profit_df: pd.DataFrame) -> int:
         out = new
     try:
         out.to_parquet(PROFIT_DETAILS_PATH, index=False)
+        _DF_MEMO.pop(str(PROFIT_DETAILS_PATH), None)
     except Exception:
         out.to_pickle(PROFIT_DETAILS_PATH.with_suffix(".pkl"))
+        _DF_MEMO.pop(str(PROFIT_DETAILS_PATH.with_suffix(".pkl")), None)
     return len(out)
 
 
 def load_profit_details() -> pd.DataFrame:
     for p in (PROFIT_DETAILS_PATH, PROFIT_DETAILS_PATH.with_suffix(".pkl")):
         if p.exists():
-            try:
-                return (pd.read_parquet(p) if p.suffix == ".parquet" else pd.read_pickle(p))
-            except Exception:
-                pass
+            df = _read_df(p)          # mtime-memoized (2.8 MB pkl, read ~9×/rerun)
+            if df is not None:
+                return df
     return pd.DataFrame()
 
 

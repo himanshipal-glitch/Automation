@@ -965,11 +965,20 @@ def last_year_left_behind(profit_df: pd.DataFrame,
         if stc is not None:
             m = m & ~df[stc].astype(str).str.strip().str.lower().eq("void")
         sub = df[m]
+        if sub.empty or acc is None:
+            return pd.DataFrame(columns=LAST_YEAR_COLS)
+        import receivables as _recv
+        # Vertical = Account parenthetical → REPORTED marketplace vertical only.
+        # Anything that isn't one (Fare, Boarding, E-Waste, APR Reality, M3,
+        # Paper, …) maps to None and is DROPPED — the sheet lists only the
+        # reported verticals' left-behind notes.
+        _tok = (sub[acc].astype(str).str.extract(r"\((.*?)\)", expand=False)
+                .fillna("").str.strip().str.lower())
+        _vert = _tok.map(_recv.ACCT_NAME_TO_VERTICAL)
+        keep = _vert.notna()
+        sub, _vert = sub[keep.values], _vert[keep]
         if sub.empty:
             return pd.DataFrame(columns=LAST_YEAR_COLS)
-        _tok = (sub[acc].astype(str).str.extract(r"\((.*?)\)", expand=False).fillna("").str.strip()
-                if acc else pd.Series("", index=sub.index))
-        _vert = _tok.map(lambda t: _canon_label(t) if t else "(other business lines)")
         return pd.DataFrame({
             "Vertical": _vert.values,
             "Type": typ,

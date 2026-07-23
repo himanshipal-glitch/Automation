@@ -1649,6 +1649,37 @@ elif page == "Summary Report":
             st.stop()
         reco_ships = {k for k in _cur_keys if _reco_dec.get(k, False)}
 
+        # Durability note + save-feedback helper — defined here so BOTH the Last
+        # Year provisions block and the Enterprise manual-inputs block below can use
+        # them. (with [github] secrets, small-store saves auto-commit to the repo.)
+        _gh_on = False
+        try:
+            _gh_on = bool(st.secrets.get("github", {}).get("token"))
+        except Exception:
+            pass
+        _durability_note = (
+            "🔒 Saves auto-commit to GitHub — entries **survive app restarts and redeploys**."
+            if _gh_on else
+            "⚠ Hosted durability: add `[github]` secrets (`token`, `repo`) so saved entries "
+            "survive app restarts/redeploys — without them they live only on this "
+            "container's disk and reset when the app reboots.")
+
+        def _save_feedback(n: int, what: str) -> str:
+            """Post-save message: stored count + any REJECTED rows + GitHub sync state."""
+            msg = f"Stored {n} {what}."
+            if db.LAST_SAVE_DROPPED:
+                msg += (" ⚠ REJECTED: " + "; ".join(db.LAST_SAVE_DROPPED)
+                        + " — the month must be a real month (any format works: Jul-26, July 2026, 07-26…).")
+            if db.LAST_SYNC_OK is True:
+                msg += " 🔒 Synced to GitHub — survives restarts."
+            elif db.LAST_SYNC_OK is False:
+                msg += (" ⚠ GitHub sync FAILED — saved on this server only (resets on "
+                        "restart). Reason: " + (db.LAST_SYNC_ERR or "unknown")
+                        + ". Common fixes: the token needs Contents: Read-and-write on "
+                        "himanshipal-glitch/Automation; repo must be exactly "
+                        "'himanshipal-glitch/Automation'.")
+            return msg
+
         # ── Last Year provisions — manual inputs (after Reco, before summary) ─
         # Per (Vertical, Table) figures for the Last Year sheet's 3-row summary:
         # the Marketplace CN/DN & expense provision, and the NO-DN value.
@@ -1693,36 +1724,8 @@ elif page == "Summary Report":
         # 2) Operational Cost per month: user override for the Enterprise
         #    summary row. Both persist until edited again.
         # durability: with [github] secrets the saves auto-commit to the repo, so
-        # entries survive hosted restarts/redeploys (the container disk is wiped).
-        _gh_on = False
-        try:
-            _gh_on = bool(st.secrets.get("github", {}).get("token"))
-        except Exception:
-            pass
-        _durability_note = (
-            "🔒 Saves auto-commit to GitHub — entries **survive app restarts and redeploys**."
-            if _gh_on else
-            "⚠ Hosted durability: add `[github]` secrets (`token`, `repo`) so saved entries "
-            "survive app restarts/redeploys — without them they live only on this "
-            "container's disk and reset when the app reboots.")
-
-        def _save_feedback(n: int, what: str) -> str:
-            """Build the post-save message: stored count + any REJECTED rows +
-            whether the values are durably synced to GitHub."""
-            msg = f"Stored {n} {what}."
-            if db.LAST_SAVE_DROPPED:
-                msg += (" ⚠ REJECTED: " + "; ".join(db.LAST_SAVE_DROPPED)
-                        + " — the month must be a real month (any format works: Jul-26, July 2026, 07-26…).")
-            if db.LAST_SYNC_OK is True:
-                msg += " 🔒 Synced to GitHub — survives restarts."
-            elif db.LAST_SYNC_OK is False:
-                msg += (" ⚠ GitHub sync FAILED — saved on this server only (resets on "
-                        "restart). Reason: " + (db.LAST_SYNC_ERR or "unknown")
-                        + ". Common fixes: the token needs Contents: Read-and-write on "
-                        "himanshipal-glitch/Automation; repo must be exactly "
-                        "'himanshipal-glitch/Automation'.")
-            return msg
-
+        # entries survive hosted restarts/redeploys (_durability_note / _save_feedback
+        # defined above, before the Last Year provisions block).
         _cd_store = db.load_custom_duty()
         with st.expander(f"🛃 Enterprise — Custom Duty bills ({len(_cd_store)} stored)"):
             st.caption("Custom-duty line items — **no bill/invoice in Zoho and no Shipment "

@@ -368,8 +368,17 @@ def inject_manual_line_items(profit_df: pd.DataFrame, ml: pd.DataFrame) -> pd.Da
     def _num(v):
         return float(pd.to_numeric(pd.Series([v]), errors="coerce").fillna(0).iloc[0])
 
+    # Row is keyed by POSITION (int), not column name: the engine layout has
+    # DUPLICATE column names ("Amount" at 48 & 56, "Qty(Kg)"/"Rate/Kg"/"Net Qty"/
+    # "Return Qty"/"Divertion/Internal"/"Check" each appear on both the purchase
+    # and the sales side). A name-keyed dict collapsed those into one slot, so e.g.
+    # r["Amount"] held BOTH the sale and the DN-to-buyer amount → Net Revenue came
+    # out as 2× the sale. Positional keys keep every column distinct.
     def _P(r, pos):   # numeric value already placed at a position (0 if blank)
-        return _num(r[cols[pos]]) if pos < ncol and r[cols[pos]] is not None else 0.0
+        return _num(r[pos]) if pos < ncol and r.get(pos) is not None else 0.0
+
+    _cs_pos = cols.index(_cs) if _cs in cols else None
+    _rn_pos = cols.index(_rn) if _rn in cols else None
 
     def _fdate(v):    # ISO parsed as-is, else day-first (Indian DD-MM-YYYY)
         s = str(v).strip()
@@ -394,75 +403,75 @@ def inject_manual_line_items(profit_df: pd.DataFrame, ml: pd.DataFrame) -> pd.Da
         is_kg = str(rec.get("Qty Unit", "")).strip().lower().startswith("kg")
         qfac = 1.0 if (is_kg or vkey in _UNIT_VERTICALS) else 1000.0
 
-        r = {c: None for c in cols}
+        r = {j: None for j in range(ncol)}   # POSITION-keyed (layout has dup names)
         # ── raw inputs into their positions ────────────────────────────────────
         for lbl, pos, dt_kind in MANUAL_INPUT_FIELDS:
             if pos is None or dt_kind in ("vertical", "unit"):
                 continue
             v = rec.get(lbl)
             if dt_kind == "num":
-                r[cols[pos]] = _num(v)
+                r[pos] = _num(v)
             elif dt_kind == "qty":
-                r[cols[pos]] = _num(v) * qfac                     # display→Kg
+                r[pos] = _num(v) * qfac                           # display→Kg
             elif dt_kind == "date":
                 _d = _fdate(v)
-                r[cols[pos]] = _d.strftime("%Y-%m-%d") if pd.notna(_d) else ""
+                r[pos] = _d.strftime("%Y-%m-%d") if pd.notna(_d) else ""
             else:  # text
                 s = "" if v is None else str(v).strip()
-                r[cols[pos]] = "" if s.lower() == "nan" else s
+                r[pos] = "" if s.lower() == "nan" else s
         # Enterprise / Processing Center → Institutional Business (split by Shipment ID)
-        r[cols[85]] = ("Institutional Business"
-                       if vkey in ("enterprise", "processingcenter", "institutionalbusiness", "ib")
-                       else vert)
-        if not str(r[cols[12]]).strip():
-            r[cols[12]] = "Manual Line Item"                      # Material fallback
+        r[85] = ("Institutional Business"
+                 if vkey in ("enterprise", "processingcenter", "institutionalbusiness", "ib")
+                 else vert)
+        if not str(r[12]).strip():
+            r[12] = "Manual Line Item"                            # Material fallback
 
         # ── derived columns (engine formulas) ───────────────────────────────────
         qtyP, rateP = _P(r, 13), _P(r, 14)
-        pur = qtyP * rateP;                    r[cols[15]] = pur   # Purchase Price
-        r[cols[17]] = qtyP - _P(r, 16)                            # Net Qty (purch)
-        tlog = _P(r, 23) + _P(r, 24) + _P(r, 25); r[cols[26]] = tlog   # Total Logistics
-        r[cols[36]] = 0.0                                         # Provision for DN = 0
+        pur = qtyP * rateP;                    r[15] = pur         # Purchase Price
+        r[17] = qtyP - _P(r, 16)                                  # Net Qty (purch)
+        tlog = _P(r, 23) + _P(r, 24) + _P(r, 25); r[26] = tlog    # Total Logistics
+        r[36] = 0.0                                               # Provision for DN = 0
         adn = _P(r, 35)
         cst = pur + tlog + _P(r, 34) + _P(r, 18) + _P(r, 29) - adn - 0.0
-        r[cols[37]] = cst                                         # Total Cost
-        r[cols[28]] = round((pur + tlog) / (qtyP - _P(r, 16)), 4) if (qtyP - _P(r, 16)) else 0.0  # Cost/Kg
+        r[37] = cst                                               # Total Cost
+        r[28] = round((pur + tlog) / (qtyP - _P(r, 16)), 4) if (qtyP - _P(r, 16)) else 0.0  # Cost/Kg
         qtyS, rateS = _P(r, 46), _P(r, 47)
-        sales = qtyS * rateS;                  r[cols[48]] = sales  # Amount (sales)
-        r[cols[51]] = qtyS - _P(r, 50)                            # Net Qty (sales)
-        r[cols[63]] = 0.0                                         # Provision for CN = 0
+        sales = qtyS * rateS;                  r[48] = sales       # Amount (sales)
+        r[51] = qtyS - _P(r, 50)                                  # Net Qty (sales)
+        r[63] = 0.0                                               # Provision for CN = 0
         acn = _P(r, 62)
         nrev = sales + _P(r, 61) + _P(r, 52) + _P(r, 56) - acn - 0.0
-        r[cols[64]] = nrev                                        # Net Revenue
-        r[cols[65]] = nrev - cst                                  # Margin
-        r[cols[70]] = round((nrev - cst) / sales * 100, 2) if sales else 0.0  # Margin %
-        r[cols[72]] = acn                                         # Total CN(Inc.Prov)
-        r[cols[73]] = adn                                         # Total DN(Inc.Prov)
-        r[cols[75]] = acn                                         # Actaul CN (mirror)
-        r[cols[76]] = adn                                         # Actual DN (mirror)
+        r[64] = nrev                                              # Net Revenue
+        r[65] = nrev - cst                                        # Margin
+        r[70] = round((nrev - cst) / sales * 100, 2) if sales else 0.0  # Margin %
+        r[72] = acn                                               # Total CN(Inc.Prov)
+        r[73] = adn                                               # Total DN(Inc.Prov)
+        r[75] = acn                                               # Actaul CN (mirror)
+        r[76] = adn                                               # Actual DN (mirror)
         # date-derived
         _q = (dt.month - 4) // 3 % 4 + 1
-        r[cols[0]] = f"Q{_q}"                                     # Quarter (fiscal)
-        r[cols[1]] = dt.strftime("%b-%y"); r[cols[80]] = dt.strftime("%b-%y")  # Month, Month.1
-        r[cols[83]] = int(dt.strftime("%V"))                     # Week No
+        r[0] = f"Q{_q}"                                           # Quarter (fiscal)
+        r[1] = dt.strftime("%b-%y"); r[80] = dt.strftime("%b-%y") # Month, Month.1
+        r[83] = int(dt.strftime("%V"))                            # Week No
         # financials with GST (display)
-        r[cols[87]] = sales - pur                                 # Gross Margin
-        r[cols[89]] = nrev - cst                                 # Net Margin
-        r[cols[90]] = round(sales * 1.18, 2)                     # Sales (GST)
-        r[cols[91]] = round(-pur * 1.18, 2)                      # Purchases (GST)
+        r[87] = sales - pur                                       # Gross Margin
+        r[89] = nrev - cst                                        # Net Margin
+        r[90] = round(sales * 1.18, 2)                            # Sales (GST)
+        r[91] = round(-pur * 1.18, 2)                             # Purchases (GST)
         # markers
-        if _cs is not None: r[_cs] = MANUAL_LINE_COST_SOURCE
-        if _rn is not None: r[_rn] = "Manual line item (user-entered) — kept until edited"
+        if _cs_pos is not None: r[_cs_pos] = MANUAL_LINE_COST_SOURCE
+        if _rn_pos is not None: r[_rn_pos] = "Manual line item (user-entered) — kept until edited"
         rows.append(r)
     if not rows:
         return profit_df
-    manual = pd.DataFrame(rows, columns=cols)
+    manual = pd.DataFrame([[r[j] for j in range(ncol)] for r in rows], columns=cols)
     # OVERRIDE: a manual row with a NON-BLANK Shipment ID whose (Shipment·Invoice·
     # Material) matches an existing computed line item REPLACES it — drop the
     # original so it isn't double-counted (the fetch-and-edit flow). Blank-shipment
     # manual rows are pure additions and never override.
-    _okeys = {(str(r[cols[3]]).strip(), str(r[cols[39]]).strip(), str(r[cols[12]]).strip())
-              for r in rows if str(r[cols[3]]).strip()}
+    _okeys = {(str(r[3]).strip(), str(r[39]).strip(), str(r[12]).strip())
+              for r in rows if str(r[3]).strip()}
     if _okeys:
         _pk = list(zip(profit_df.iloc[:, 3].astype(str).str.strip(),
                        profit_df.iloc[:, 39].astype(str).str.strip(),

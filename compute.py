@@ -326,12 +326,16 @@ def build_profitability(merged_df: pd.DataFrame,
         _bp_pur = (pd.to_numeric(_s(_bp, "Quantity"), errors="coerce").fillna(0.0)
                    * pd.to_numeric(_s(_bp, "Rate"), errors="coerce").fillna(0.0))
         _bp_map = _bp_pur.groupby(_s(_bp, "Bill_Number", "").astype(str).str.strip()).sum().to_dict()
+        _row_bill = _s(d, "Bill_Number", "").astype(str).str.strip()
         for _dsub, _acol in ((dn1_sub, "DN_1_Associated_Bill_Number"),
                              (dn2_sub, "DN_2_Associated_Bill_Number")):
             _assoc = _s(d, _acol, "").astype(str).str.strip()
             _legpur = _assoc.map(lambda b: float(_bp_map.get(b, 0.0)))
             _exgst = _dsub / _GST
-            _isfull = (_legpur > 0) & (_exgst >= 0.95 * _legpur)
+            # only reverse the row whose OWN bill is the one the DN is against —
+            # so a fully-returned leg (its own orphan line) is zeroed, while the
+            # invoiced leg (a different bill number) keeps its cost.
+            _isfull = (_legpur > 0) & (_exgst >= 0.95 * _legpur) & (_row_bill == _assoc)
             _dn_rev = _dn_rev + pd.Series(np.where(_isfull, _legpur, 0.0), index=d.index)
             _dn_rev_actual = _dn_rev_actual + pd.Series(np.where(_isfull, _exgst, 0.0), index=d.index)
     AJ = -_dn_rev                       # Full Debit Note — credit back the returned leg

@@ -341,7 +341,8 @@ def _recommerce_history_index(history_df: pd.DataFrame) -> dict:
 
 def merge_invoice_bill(inv_df: pd.DataFrame, bill_df: pd.DataFrame,
                        history_df: pd.DataFrame | None = None,
-                       amazon_map: dict | None = None) -> tuple[pd.DataFrame, dict]:
+                       amazon_map: dict | None = None,
+                       fully_reversed_bills: set | None = None) -> tuple[pd.DataFrame, dict]:
     """
     Pair Invoice lines with Bill purchase lines per CFSO_Number + Item_Name.
 
@@ -397,12 +398,23 @@ def merge_invoice_bill(inv_df: pd.DataFrame, bill_df: pd.DataFrame,
     groups = sorted(inv.groupby([ship_key, item_key, invno_key]).groups.items(),
                     key=lambda kv: kv[0][0].count(","))
 
+    # Bills fully RETURNED to the seller are kept OFF the sale line (differentiated
+    # by their Bill Number): they don't belong to the sale, so they drop through to
+    # the orphan-bill path as their own purchase-only line (where the vendor DN then
+    # reverses them to cost 0). Only excluded when the shipment has ANOTHER bill to
+    # cover the sale — never strip the sole cost source.
+    _frb = fully_reversed_bills or set()
+
     for (ship_str, item, _invno), inv_pos_idx in groups:
         ships = [s.strip() for s in ship_str.split(",") if s.strip()]
-        cand = [i for s in ships for i in bill_index.get((s, item), [])
-                if i not in bill_used]
-        if not cand:
+        cand_all = [i for s in ships for i in bill_index.get((s, item), [])
+                    if i not in bill_used]
+        if not cand_all:
             continue
+        cand = [i for i in cand_all
+                if str(bill.at[i, "Bill_Number"]).strip() not in _frb] if "Bill_Number" in bill.columns else cand_all
+        if not cand:                       # every candidate was a full-return bill —
+            cand = cand_all                # keep them rather than leave the sale uncosted
         inv_pos = list(inv_pos_idx)
         ig = inv.loc[inv_pos]
 
@@ -645,6 +657,41 @@ def merge_invoice_bill(inv_df: pd.DataFrame, bill_df: pd.DataFrame,
     return merged, stats
 
 
+def _fully_reversed_bill_numbers(bill_purchases_df, dn_df) -> set:
+    """Bill numbers whose vendor DN(s) reverse ≥95% of the bill's purchase
+    (qty × rate) — i.e. that bill's goods were fully RETURNED to the seller.
+    Matched to the DN by its 'Associated Bill Number'. Such a bill is kept OFF
+    the sale line by merge_invoice_bill so it lands as its OWN orphan line, and
+    compute reverses only the row whose Bill_Number equals it."""
+    out: set = set()
+    if (bill_purchases_df is None or dn_df is None
+            or getattr(bill_purchases_df, "empty", True) or getattr(dn_df, "empty", True)):
+        return out
+    bp = bill_purchases_df
+    bn = _col(bp, "Bill_Number", "Bill Number")
+    if bn is None or "Quantity" not in bp.columns or "Rate" not in bp.columns:
+        return out
+    _pur = (pd.to_numeric(bp["Quantity"], errors="coerce").fillna(0.0)
+            * pd.to_numeric(bp["Rate"], errors="coerce").fillna(0.0))
+    bmap = _pur.groupby(bp[bn].astype(str).str.strip()).sum()
+    ab = _col(dn_df, "Associated_Bill_Number", "Associated Bill Number")
+    st = _col(dn_df, "SubTotal")
+    nn = _col(dn_df, "Vendor_Credit_Number", "Vendor Credit Number")
+    if ab is None or st is None:
+        return out
+    d = dn_df.copy()
+    d["_ab"] = d[ab].astype(str).str.strip()
+    d["_st"] = pd.to_numeric(d[st], errors="coerce").fillna(0.0)
+    if nn is not None:                      # one SubTotal per note (repeats per line)
+        d = d.drop_duplicates(subset=[nn])
+    for b, dn_sub in d.groupby("_ab")["_st"].sum().items():
+        if not b or b == "nan":
+            continue
+        if b in bmap.index and float(bmap[b]) > 0 and (float(dn_sub) / 1.18) >= 0.95 * float(bmap[b]):
+            out.add(b)
+    return out
+
+
 # ── CN / DN pivot helpers ─────────────────────────────────────────────────────
 def run_full_pipeline(inv_df, bill_purchases_df, bill_logistics_df,
                       cn_df, dn_df,
@@ -658,8 +705,10 @@ def run_full_pipeline(inv_df, bill_purchases_df, bill_logistics_df,
       2. Pivot CN & DN wide (max 2 each), left-join on CFSO_Number
       3. Return (full_merged_df, pipeline_stats)
     """
+    _frb = _fully_reversed_bill_numbers(bill_purchases_df, dn_df)
     merged, s1 = merge_invoice_bill(inv_df, bill_purchases_df,
-                                    history_df=history_df, amazon_map=amazon_map)
+                                    history_df=history_df, amazon_map=amazon_map,
+                                    fully_reversed_bills=_frb)
     final,  s2 = merge_cn_dn(merged, cn_df, dn_df)
     stats = {**s1, **s2,
              "logistics_rows": len(bill_logistics_df) if bill_logistics_df is not None else 0}
@@ -763,13 +812,32 @@ def merge_cn_dn(merged_df: pd.DataFrame,
     result = result.merge(dn_wide, left_on="CFSO_Number", right_on="Referenceno", how="left").drop(columns=["Referenceno"], errors="ignore")
 
     # ── CN/DN belong to the SHIPMENT, not to every order line ─────────────────
-    # If a shipment has multiple rows (several items/orders), keep the CN/DN
-    # values only on the FIRST row — blank them on the rest, so return
-    # quantities and amounts are never double-counted.
-    dup_mask = result["CFSO_Number"].duplicated(keep="first")
-    cn_dn_cols = [c for c in result.columns if c.startswith("CN_") or c.startswith("DN_")]
-    if cn_dn_cols:
-        result.loc[dup_mask, cn_dn_cols] = None
+    # Keep CN (and any DN with no associated bill) on the shipment's FIRST row,
+    # blanked on the rest, so returns/amounts are never double-counted. EXCEPTION:
+    # a DN that names an Associated Bill Number is kept on the row whose
+    # Bill_Number matches it — so a fully-returned bill's DN lands on ITS OWN line
+    # (differentiated by bill number), not the invoiced leg. First row if no match.
+    first_mask = result["CFSO_Number"].duplicated(keep="first")
+    default_cols = [c for c in result.columns if c.startswith("CN_")]
+    _bn = result["Bill_Number"].astype(str).str.strip() if "Bill_Number" in result.columns else None
+    for _slot in ("1", "2"):
+        _cols = [c for c in result.columns if c.startswith(f"DN_{_slot}_")]
+        _abcol = f"DN_{_slot}_Associated_Bill_Number"
+        if not _cols:
+            continue
+        if _bn is not None and _abcol in result.columns:
+            _ab = result[_abcol].astype(str).str.strip()
+            _keep = pd.Series(False, index=result.index)
+            for _ship, _idx in result.groupby("CFSO_Number").groups.items():
+                _idx = list(_idx)
+                _assoc = next((_ab[i] for i in _idx if _ab[i] not in ("", "nan", "None")), "")
+                _match = [i for i in _idx if _bn[i] == _assoc] if _assoc else []
+                _keep[(_match[0] if _match else _idx[0])] = True   # one keeper per slot
+            result.loc[~_keep, _cols] = None
+        else:
+            default_cols += _cols
+    if default_cols:
+        result.loc[first_mask, default_cols] = None
 
     stats = {
         "base_rows": len(merged_df),

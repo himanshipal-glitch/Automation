@@ -1451,7 +1451,12 @@ def _summary_block(w: pd.DataFrame, recv: float, pay: float, wd: float = 30,
     net_dn = float(w.loc[_elig, "Actual_DN"].sum()) + float(w.loc[_elig, "Provision_for_DN"].sum())
     dn_val = float(w["Actual_DN"].sum()) + float(w["Provision_for_DN"].sum())  # display (all)
     gross_pur = float(w["Purchase_Price"].sum())
-    pur   = gross_pur - net_dn          # only eligible verticals' DN reduces cost
+    # Full Debit Note = a fully-returned bill leg credited back (negative); it
+    # reduces Purchases exactly like Actual DN so Purchases stays == Total Cost −
+    # logistics. 0 for every non-return row, so only full-return shipments change.
+    _full_dn = (float(pd.to_numeric(w.loc[_elig, "Full_Debit_Note"], errors="coerce").fillna(0).sum())
+                if "Full_Debit_Note" in w.columns else 0.0)
+    pur   = gross_pur + _full_dn - net_dn   # only eligible verticals' DN reduces cost
     gm    = sales - pur
     # Transportation Charges = per-shipment logistics + any blank-CFSO transport
     # charge override (AFR "Transport Charges" bills, kept OUT of op cost).
@@ -3143,6 +3148,7 @@ def _extract_key_cols(df: pd.DataFrame) -> pd.DataFrame:
         "Margin_Bucket":    71,    # BU
         "Actaul_CN":        75,    # BY
         "Actual_DN":        76,    # BZ
+        "Full_Debit_Note":  34,    # AJ — full purchase reversal (goods returned to seller)
         "Provision_for_DN": 36,    # AL (ReWerse 2.5% DN provision)
         "Provision_for_CN": 63,    # BM (ReWerse 2.5% CN provision)
         "Month_mmm_yy":     80,    # CD — second Month col (mmm-yy)
@@ -3159,7 +3165,7 @@ def _extract_key_cols(df: pd.DataFrame) -> pd.DataFrame:
         "Qty_Kg_sales","Rate_Kg_sales","Amount_sales","Return_Qty_sales","Net_Qty_sales",
         "Net_Revenue","Margin_BO","LMI_Inception","Margin_pct",
         "Actaul_CN","Actual_DN","Cost_CE","Revenue_CF","Operational_Cost",
-        "Provision_for_DN","Provision_for_CN",
+        "Provision_for_DN","Provision_for_CN","Full_Debit_Note",
     }
 
     safe = {}

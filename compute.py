@@ -189,7 +189,8 @@ def _fiscal_week(dates: pd.Series) -> pd.Series:
 def build_profitability(merged_df: pd.DataFrame,
                         logistics_df: pd.DataFrame | None = None,
                         no_dn_shipments: set | None = None,
-                        provision_rates: dict | None = None) -> pd.DataFrame:
+                        provision_rates: dict | None = None,
+                        bill_purchases_df: pd.DataFrame | None = None) -> pd.DataFrame:
 
     d = merged_df.copy()
 
@@ -308,6 +309,34 @@ def build_profitability(merged_df: pd.DataFrame,
     BK  = pd.Series(0.0, index=d.index) # Full Credit Notes
     AJ  = pd.Series(0.0, index=d.index) # Full Debit Note
 
+    # ── Vendor-DN FULL REVERSAL (goods returned to seller) ────────────────────
+    # When a vendor credit (DN) covers ~the whole of the bill it's raised against,
+    # the goods were fully RETURNED to that supplier. The manual books that bill
+    # leg as a "Full Debit Note": the leg's purchase is credited back (cost → 0,
+    # NO DN provision on it) while the shipment's OTHER bill legs stay normal.
+    # Detect per DN via its Associated Bill Number — DN ex-GST >= 95% of that
+    # bill's purchase (qty × rate). `_dn_rev` = ex-GST purchase of the reversed
+    # leg(s) (booked as Full DN, and excluded from the provision base);
+    # `_dn_rev_actual` = the DN ex-GST removed from Actual DN so it isn't counted
+    # twice. PARTIAL DNs (< 95%) are untouched — only true full returns change.
+    _dn_rev = pd.Series(0.0, index=d.index)
+    _dn_rev_actual = pd.Series(0.0, index=d.index)
+    if bill_purchases_df is not None and not getattr(bill_purchases_df, "empty", True):
+        _bp = bill_purchases_df
+        _bp_pur = (pd.to_numeric(_s(_bp, "Quantity"), errors="coerce").fillna(0.0)
+                   * pd.to_numeric(_s(_bp, "Rate"), errors="coerce").fillna(0.0))
+        _bp_map = _bp_pur.groupby(_s(_bp, "Bill_Number", "").astype(str).str.strip()).sum().to_dict()
+        for _dsub, _acol in ((dn1_sub, "DN_1_Associated_Bill_Number"),
+                             (dn2_sub, "DN_2_Associated_Bill_Number")):
+            _assoc = _s(d, _acol, "").astype(str).str.strip()
+            _legpur = _assoc.map(lambda b: float(_bp_map.get(b, 0.0)))
+            _exgst = _dsub / _GST
+            _isfull = (_legpur > 0) & (_exgst >= 0.95 * _legpur)
+            _dn_rev = _dn_rev + pd.Series(np.where(_isfull, _legpur, 0.0), index=d.index)
+            _dn_rev_actual = _dn_rev_actual + pd.Series(np.where(_isfull, _exgst, 0.0), index=d.index)
+    AJ = -_dn_rev                       # Full Debit Note — credit back the returned leg
+    BZ = BZ - _dn_rev_actual            # remove the reversed DN from Actual DN (booked via AJ)
+
     # ── ReWerse provision rule ────────────────────────────────────────────────
     # Provision applies to ReWerse shipments that are NOT in the 'cf.dn = no'
     # exclusion file (those shipments don't get a provision). For the rest:
@@ -339,7 +368,8 @@ def build_profitability(merged_df: pd.DataFrame,
     # Provision for DN is charged on the PURCHASE side. Base = Purchase Price PLUS
     # Transportation Charges (AB = Total Logistics Cost): provision = (Q + AB) × rate.
     # (Previously it was Q × rate only.) Applies to every vertical carrying a rate.
-    AL  = pd.Series(np.where(_prov_trig, _rate * (Q + AB), 0.0), index=d.index)  # Provision for DN
+    # base excludes any FULLY-REVERSED leg (_dn_rev) — no provision on returned goods
+    AL  = pd.Series(np.where(_prov_trig, _rate * ((Q - _dn_rev).clip(lower=0) + AB), 0.0), index=d.index)  # Provision for DN
 
     # ── Full credit-note reversal ──────────────────────────────────────────────
     # When a shipment's total Actual CN is >= 95% of its total Sale, the deal is

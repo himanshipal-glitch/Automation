@@ -385,6 +385,31 @@ def inject_manual_line_items(profit_df: pd.DataFrame, ml: pd.DataFrame) -> pd.Da
         return (pd.to_datetime(s, errors="coerce") if _re.match(r"^\d{4}-\d{1,2}-\d{1,2}", s)
                 else pd.to_datetime(s, errors="coerce", dayfirst=True))
 
+    # PRESERVE ENGINE PROVISIONS ON OVERRIDES: derive each computed line's CN & DN
+    # provision RATE (provision ÷ base) keyed by (Shipment·Invoice·Material), so an
+    # override re-applies the same rate to its OWN base — the engine's provision is
+    # kept (a manually-added logistics cost gets provisioned too; a line the engine
+    # suppressed stays at 0). CN base = sale (col 48); DN base = purchase (15) +
+    # total logistics (26), matching compute's AL = rate × (Q + AB).
+    _orig_rates: dict = {}
+    try:
+        _pk3 = list(zip(profit_df.iloc[:, 3].astype(str).str.strip(),
+                        profit_df.iloc[:, 39].astype(str).str.strip(),
+                        profit_df.iloc[:, 12].astype(str).str.strip()))
+        _o_sale = pd.to_numeric(profit_df.iloc[:, 48], errors="coerce").fillna(0.0)
+        _o_pcn  = pd.to_numeric(profit_df.iloc[:, 63], errors="coerce").fillna(0.0)
+        _o_bdn  = (pd.to_numeric(profit_df.iloc[:, 15], errors="coerce").fillna(0.0)
+                   + pd.to_numeric(profit_df.iloc[:, 26], errors="coerce").fillna(0.0))
+        _o_pdn  = pd.to_numeric(profit_df.iloc[:, 36], errors="coerce").fillna(0.0)
+        for _i, _k in enumerate(_pk3):
+            if not _k[0]:
+                continue
+            _s, _b = float(_o_sale.iloc[_i]), float(_o_bdn.iloc[_i])
+            _orig_rates[_k] = (float(_o_pcn.iloc[_i]) / _s if _s else 0.0,
+                               float(_o_pdn.iloc[_i]) / _b if _b else 0.0)
+    except Exception:
+        _orig_rates = {}
+
     rows = []
     for i in range(len(ml)):
         # 'Apply' toggle: skip stored entries the user chose NOT to apply to this
@@ -426,27 +451,33 @@ def inject_manual_line_items(profit_df: pd.DataFrame, ml: pd.DataFrame) -> pd.Da
         if not str(r[12]).strip():
             r[12] = "Manual Line Item"                            # Material fallback
 
+        # provision rates carried from the matched computed line (0 if no match /
+        # engine suppressed it) — applied to THIS line's own base below.
+        _cnr, _dnr = (_orig_rates.get((str(r[3]).strip(), str(r[39]).strip(),
+                                       str(r[12]).strip()), (0.0, 0.0))
+                      if str(r[3]).strip() else (0.0, 0.0))
+
         # ── derived columns (engine formulas) ───────────────────────────────────
         qtyP, rateP = _P(r, 13), _P(r, 14)
         pur = qtyP * rateP;                    r[15] = pur         # Purchase Price
         r[17] = qtyP - _P(r, 16)                                  # Net Qty (purch)
         tlog = _P(r, 23) + _P(r, 24) + _P(r, 25); r[26] = tlog    # Total Logistics
-        r[36] = 0.0                                               # Provision for DN = 0
+        r[36] = round(_dnr * (pur + tlog), 2)                     # Provision for DN (engine rate)
         adn = _P(r, 35)
-        cst = pur + tlog + _P(r, 34) + _P(r, 18) + _P(r, 29) - adn - 0.0
+        cst = pur + tlog + _P(r, 34) + _P(r, 18) + _P(r, 29) - adn - r[36]
         r[37] = cst                                               # Total Cost
         r[28] = round((pur + tlog) / (qtyP - _P(r, 16)), 4) if (qtyP - _P(r, 16)) else 0.0  # Cost/Kg
         qtyS, rateS = _P(r, 46), _P(r, 47)
         sales = qtyS * rateS;                  r[48] = sales       # Amount (sales)
         r[51] = qtyS - _P(r, 50)                                  # Net Qty (sales)
-        r[63] = 0.0                                               # Provision for CN = 0
+        r[63] = round(_cnr * sales, 2)                            # Provision for CN (engine rate)
         acn = _P(r, 62)
-        nrev = sales + _P(r, 61) + _P(r, 52) + _P(r, 56) - acn - 0.0
+        nrev = sales + _P(r, 61) + _P(r, 52) + _P(r, 56) - acn - r[63]
         r[64] = nrev                                              # Net Revenue
         r[65] = nrev - cst                                        # Margin
         r[70] = round((nrev - cst) / sales * 100, 2) if sales else 0.0  # Margin %
-        r[72] = acn                                               # Total CN(Inc.Prov)
-        r[73] = adn                                               # Total DN(Inc.Prov)
+        r[72] = acn + r[63]                                       # Total CN(Inc.Prov)
+        r[73] = adn + r[36]                                       # Total DN(Inc.Prov)
         r[75] = acn                                               # Actaul CN (mirror)
         r[76] = adn                                               # Actual DN (mirror)
         # date-derived

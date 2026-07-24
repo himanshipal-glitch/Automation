@@ -263,6 +263,11 @@ def build_profitability(merged_df: pd.DataFrame,
                               & ((_cleanish["qty"] - _ar["qty"]).abs() < 1)]
             for _bsid in _cand.index:
                 _bmask = (_ship_r == _bsid)
+                # If the resale already has its OWN current purchase bill, keep it
+                # (the manual costs each shipment at its own bill). Only re-cost at
+                # the original bill when the resale has NO purchase of its own.
+                if float(Q[_bmask].sum()) > 0:
+                    continue
                 _bqty  = float(O[_bmask].sum())
                 # re-cost the resale at the ORIGINAL bill (spread by qty share)
                 if _bqty > 0:

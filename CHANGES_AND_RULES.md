@@ -12,6 +12,40 @@ vertical against its signed-off manual file before rollout.
 
 ---
 
+## 2026-07-28 · Release: what went to GitHub, and what deliberately did not
+
+Commit **`2cd90ad`** on `main` — `reports.py` (+134/−2) · `CHANGES_AND_RULES.md` ·
+`requirements.txt` · `.gitignore`. **Code and docs only**, per the `CLAUDE.md`
+house rule.
+
+### Deliberately NOT pushed — `persistent/profit_details.pkl`
+
+Owner's decision (28-07-2026): left out of the loop, summary numbers already
+reconcile. Recorded here so the consequence is not lost:
+
+| | Apr | May | Jun | **Jul** | total |
+|---|---|---|---|---|---|
+| Local (working copy) | 659 | 668 | 858 | **423** | **2,608** |
+| GitHub baseline | 658 | 668 | 858 | **81** | **2,265** |
+
+The gap is **340 July line rows** — Re-Commerce 252 · IT AD 41 · IB 29 ·
+ReWerse 11 · Metal 7 (plus one extra April line item).
+
+**This does not affect any summary figure.** The exposure is the *Details sheet*:
+the hosted Streamlit Cloud disk resets to the GitHub baseline on every restart or
+redeploy, so after a restart every downloaded workbook would carry the 2,265-row
+store and lose those 340 July rows — and the "sum Details to cross-check the FY
+Total" check would stop tying until the next upload re-accumulates them.
+
+Recoverable by re-uploading the historical MIS exports in date order, while those
+files still exist. **Revisit whenever the hosted app is next restarted.**
+
+Note also: the authoritative copy is unconfirmed. The local file was pickled under
+numpy 2, i.e. written by the hosted app, so the live hosted disk may hold something
+newer again. Any future sync should start by establishing which store is current.
+
+---
+
 ## 2026-07-28 · Cross-vertical verification of the Last Year rules
 
 **No rollout was needed.** `last_year_left_behind()` has never had per-vertical

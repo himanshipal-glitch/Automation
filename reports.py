@@ -988,6 +988,45 @@ def _acct_shipment_vertical(acct_txn_df) -> dict:
     return out
 
 
+# ── Last Year sheet — GST / TDS de-grossing rule (THIS SHEET ONLY) ────────────
+# Applies to the Last Year sheet's DN table and NOTHING else: no summary metric,
+# no Details column, no other sheet reads it. The main engine keeps its own,
+# separate DN treatment (compute.BZ = SubTotal / 1.18).
+_LY_TAX_RATES = (
+    (r"igst\s*tds", -0.02),
+    (r"cgst\s*tds", -0.01),
+    (r"sgst\s*tds", -0.01),
+    (r"igst",        0.18),
+    (r"cgst",        0.09),
+    (r"sgst",        0.09),
+)
+
+
+def _ly_tax_factor(accounts) -> float:
+    """(1 + Σ tax rates) implied by the ACCOUNT NAMES on one vendor credit.
+
+    Rates are SUMMED, never compounded — a note carrying both CGST and SGST is
+    9% + 9% = 18% → 1.18. (Compounding as 1.09² = 1.1881 would value note
+    36/MET/27VC00017 at 819.29 against the manual's 825.00.) A GST-TDS account
+    REDUCES the rate: IGST TDS −2% → 1.16; CGST/SGST TDS −1% each → 1.08.
+    Each pattern contributes AT MOST ONCE, so a note carrying two IGST accounts
+    ('Input IGST Suspense Account' + 'IGST (Ineligible)') is still 18%.
+
+    Verified against 'Profitability Report of End Generator till 19-07-2026.xlsx'
+    (Last year's sheet): 39 of 40 matched notes tie to <₹0.01 — 32 notes at 1.18,
+    8 tax-free notes at 1.00. IGST is 1.18, confirmed by the finance team and by
+    those 32 notes; do NOT "simplify" it to 1.08. The TDS rates (1.16 / 1.08) are
+    per the finance team's spec but are NOT yet evidenced by this vertical — no
+    TDS-bearing note appears in its Last Year set.
+    """
+    j = " | ".join(str(a).lower() for a in accounts)
+    rate = 0.0
+    for pat, r in _LY_TAX_RATES:
+        if _re.search(pat, j):
+            rate += r
+    return 1.0 + rate
+
+
 def last_year_left_behind(profit_df: pd.DataFrame,
                           cn_df: pd.DataFrame | None,
                           dn_df: pd.DataFrame | None,
@@ -1014,7 +1053,18 @@ def last_year_left_behind(profit_df: pd.DataFrame,
                  if p.strip() and p.strip().lower() not in ("nan", "none", "nat")]
         return bool(ships) and not any(p in det for p in ships)   # real shipment(s), none in Details
 
-    def _extract(df, typ, date_names, num_names, party_names, status_names, extra_names=None):
+    def _extract(df, typ, date_names, num_names, party_names, status_names, extra_names=None,
+                 amount_names=("subtotal", "amount"), dedupe_note=False):
+        """`amount_names` — which column carries the row's value. Bills repeat the
+        DOCUMENT SubTotal on every line, so the Logistics table must read the
+        PER-ITEM 'Item Total' instead (a two-line bill like BWD00003159/25-26 is
+        21,000 + 6,100 in the manual, not its 27,100 SubTotal twice).
+
+        `dedupe_note` — collapse to ONE row per note number, applied AFTER the
+        vertical filter so the kept line is the first that HAS a reported vertical.
+        Needed for CN, where a note's SubTotal repeats across its line items (53 of
+        270 notes are multi-line, e.g. 36/MET/27CN00068 has 3). NOT used for
+        Logistics, where a bill number legitimately recurs with different items."""
         if df is None or getattr(df, "empty", True):
             return pd.DataFrame(columns=LAST_YEAR_COLS)
         # match on ALPHANUMERICS only — the session store sanitizes names
@@ -1031,7 +1081,7 @@ def last_year_left_behind(profit_df: pd.DataFrame,
         if ref is None:
             return pd.DataFrame(columns=LAST_YEAR_COLS)
         acc = col("account"); dtc = col(*date_names); numc = col(*num_names)
-        prc = col(*party_names); subc = col("subtotal", "amount"); stc = col(*status_names)
+        prc = col(*party_names); subc = col(*amount_names); stc = col(*status_names)
         exc = col(*extra_names) if extra_names else None
         m = df[ref].map(_is_left)
         if stc is not None:
@@ -1051,7 +1101,7 @@ def last_year_left_behind(profit_df: pd.DataFrame,
         sub, _vert = sub[keep.values], _vert[keep]
         if sub.empty:
             return pd.DataFrame(columns=LAST_YEAR_COLS)
-        return pd.DataFrame({
+        out = pd.DataFrame({
             "Vertical": _vert.values,
             "Type": typ,
             "SO Number": sub[ref].astype(str).str.strip().values,
@@ -1062,12 +1112,78 @@ def last_year_left_behind(profit_df: pd.DataFrame,
             "Amount": (pd.to_numeric(sub[subc], errors="coerce").fillna(0.0).values if subc else 0.0),
             "PO": (sub[exc].astype(str).values if exc is not None else ""),
         })
+        if dedupe_note and numc is not None:      # one row per document
+            out = out.drop_duplicates(subset=["Note Number"], keep="first")
+        return out
 
-    dn = _extract(dn_df, "DN", ("vendor credit date", "debit note date"),
-                  ("vendor credit number", "debit note number"),
-                  ("vendor name",), ("vendor credit status", "status"))
+    def _extract_dn_notes(df):
+        """DN table — ONE row per vendor credit, valued EX-TAX.
+
+        Zoho repeats a note's DOCUMENT SubTotal on every line the note has,
+        including its tax lines, so the per-row path used by the other three
+        tables would (a) double-count any note with two material lines — e.g.
+        36/MET/27VC00027 carries two 'Marketplace Purchases (Metal)' lines, both
+        stamped 6,638.02, which the manual counts once — and (b) leave the tax in.
+        The manual shows one row per note at SubTotal ÷ _ly_tax_factor(...).
+
+        Vertical comes from whichever of the note's lines carries a
+        reported-vertical account; its tax lines have no '(vertical)' at all, so
+        they contribute their RATE without creating a phantom row. A note with no
+        reported-vertical line is dropped, exactly as before."""
+        if df is None or getattr(df, "empty", True):
+            return pd.DataFrame(columns=LAST_YEAR_COLS)
+        _nrm = lambda s: "".join(ch for ch in str(s).lower() if ch.isalnum())
+        low = {_nrm(c): c for c in df.columns}
+
+        def col(*names):
+            for n in names:
+                if _nrm(n) in low:
+                    return low[_nrm(n)]
+            return None
+
+        ref = col("reference#", "referenceno", "reference no", "reference number", "cf.so number")
+        acc, subc = col("account"), col("subtotal", "amount")
+        numc = col("vendor credit number", "debit note number")
+        if ref is None or acc is None or subc is None or numc is None:
+            return pd.DataFrame(columns=LAST_YEAR_COLS)
+        dtc, prc = col("vendor credit date", "debit note date"), col("vendor name")
+        stc = col("vendor credit status", "status")
+
+        d = df.copy()
+        if stc is not None:                     # a voided note is not a note
+            d = d[~d[stc].astype(str).str.strip().str.lower().eq("void")]
+        d = d[d[ref].map(_is_left)]              # shipment not in this MIS's Details
+        if d.empty:
+            return pd.DataFrame(columns=LAST_YEAR_COLS)
+
+        import receivables as _recv
+        d["_note"] = d[numc].astype(str).str.strip()
+        d["_vert"] = (d[acc].astype(str).str.extract(r"\((.*?)\)", expand=False)
+                      .fillna("").str.strip().str.lower().map(_recv.ACCT_NAME_TO_VERTICAL))
+        rows = []
+        for note, g in d.groupby("_note", sort=False):
+            vert = g["_vert"].dropna()
+            if vert.empty:                       # no reported vertical on this note
+                continue
+            sub = pd.to_numeric(pd.Series([g[subc].iloc[0]]), errors="coerce").fillna(0.0).iloc[0]
+            _dt = pd.to_datetime(g[dtc].iloc[0], errors="coerce") if dtc else pd.NaT
+            rows.append({
+                "Vertical": vert.iloc[0],
+                "Type": "DN",
+                "SO Number": str(g[ref].iloc[0]).strip(),
+                "Date": (_dt.strftime("%Y-%m-%d") if pd.notna(_dt) else ""),
+                "Note Number": note,
+                "Party": (str(g[prc].iloc[0]) if prc else ""),
+                "Amount": sub / _ly_tax_factor(g[acc].tolist()),
+                "PO": "",
+            })
+        return (pd.DataFrame(rows, columns=LAST_YEAR_COLS) if rows
+                else pd.DataFrame(columns=LAST_YEAR_COLS))
+
+    dn = _extract_dn_notes(dn_df)
     cn = _extract(cn_df, "CN", ("credit note date",), ("credit note number",),
-                  ("customer name",), ("credit note status", "status"))
+                  ("customer name",), ("credit note status", "status"),
+                  dedupe_note=True)
     # Cash Discount: CN-sheet rows whose Account contains 'Cash Discount' — a
     # SEPARATE table (so CN above naturally excludes them: their Account
     # parenthetical is the customer, not a reported vertical). Vertical comes from
@@ -1119,7 +1235,9 @@ def last_year_left_behind(profit_df: pd.DataFrame,
             log = _extract(_logb, "Logistics", ("bill date", "date"),
                            ("bill number", "lr no", "bill no"),
                            ("vendor name", "transporter name"), ("bill status", "status"),
-                           extra_names=("purchaseorder", "purchase order number", "purchaseorder number"))
+                           extra_names=("purchaseorder", "purchase order number", "purchaseorder number"),
+                           # PER-ITEM value: a bill's SubTotal repeats on every line
+                           amount_names=("item total", "itemtotal", "subtotal", "amount"))
     out = pd.concat([dn, cn, log, cd], ignore_index=True)
     if out.empty:
         return pd.DataFrame(columns=LAST_YEAR_COLS)

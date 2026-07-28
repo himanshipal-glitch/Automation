@@ -15,6 +15,7 @@
 !USER_SOP.md
 !AUTOMATION_REPORT.md
 !WALKTHROUGH.md
+!CHANGES_AND_RULES.md
 
 # app config (example only — NEVER the real secrets.toml)
 !.streamlit/

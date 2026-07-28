@@ -1,6 +1,13 @@
 streamlit>=1.35.0
-pandas>=2.0.0
-numpy>=1.24.0
+# 2.3+ is required to UNPICKLE the persistent stores written by the hosted app
+# (2.2.3 raises "TypeError: issubclass() arg 1 must be a class" on
+# profit_details.pkl). <3 because the app targets the pandas-2 API.
+pandas>=2.3,<3
+# the persistent stores (profit_details.pkl et al) are pickled by the hosted app
+# under numpy 2, whose arrays live in numpy._core — numpy 1.x cannot unpickle them
+# (ModuleNotFoundError: numpy._core.numeric). Upper bound keeps tensorflow-intel
+# (numpy<2.1) usable in the same interpreter.
+numpy>=2.0,<2.1
 openpyxl>=3.1.0
 pyarrow>=14.0.0
 requests>=2.31.0

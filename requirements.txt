@@ -5,9 +5,13 @@ streamlit>=1.35.0
 pandas>=2.3,<3
 # the persistent stores (profit_details.pkl et al) are pickled by the hosted app
 # under numpy 2, whose arrays live in numpy._core — numpy 1.x cannot unpickle them
-# (ModuleNotFoundError: numpy._core.numeric). Upper bound keeps tensorflow-intel
-# (numpy<2.1) usable in the same interpreter.
-numpy>=2.0,<2.1
+# (ModuleNotFoundError: numpy._core.numeric).
+# NO UPPER BOUND: numpy only ships Python 3.13 wheels from 2.1.0, so a "<2.1" cap
+# leaves pip nothing installable on a 3.13 runtime — the source build fails, the
+# whole install aborts, and later packages (openpyxl) are never installed. That
+# surfaced as a ModuleNotFoundError on openpyxl.styles, NOT on numpy. If you need
+# numpy<2.1 locally for tensorflow-intel, pin it in your local env, never here.
+numpy>=2.0
 openpyxl>=3.1.0
 pyarrow>=14.0.0
 requests>=2.31.0

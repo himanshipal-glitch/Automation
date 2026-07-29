@@ -2361,6 +2361,38 @@ def _style_workbook(raw: bytes, headers: list[tuple[str, int]],
     return out.getvalue()
 
 
+def _rc_ns_detail(df: pd.DataFrame, dbm=None) -> pd.DataFrame:
+    """The WITHOUT-SAMSUNG Re-Commerce detail: Re-Commerce rows whose VENDOR name
+    doesn't start with 'Samsung', overlaid with the signed-off without-Samsung
+    manual store and ordered chronologically.
+
+    THE single definition of that subset. Used by BOTH the 'Details (No Samsung)'
+    sheet inside the combined Re-Commerce workbook AND the standalone
+    Without-Samsung workbook (`ns_only=True`), so the two can never drift apart.
+    Falls back to the plain vendor filter when no manual store exists."""
+    if df is None or not len(df):
+        return df
+    _cat = df.iloc[:, 85].astype(str)
+    _rc = _cat.str.contains(r"re-commerce|recommerce", case=False, na=False)
+    _sup = df.iloc[:, 4].astype(str).str.strip().str.lower()
+    out = df[_rc & ~_sup.str.startswith("samsung")]
+    try:
+        _manual = dbm.load_recommerce_manual(False) if dbm is not None else None
+    except Exception:
+        _manual = None
+    if _manual is not None and len(_manual):
+        out = apply_recommerce_manual(out, _manual)
+        if "Row Source" in out.columns:
+            _rsrc = out["Row Source"].astype(str)
+            out.loc[_rsrc.isin(["", "nan", "None"]) | out["Row Source"].isna(),
+                    "Row Source"] = "Manual (No-Samsung file)"
+        if "Date" in out.columns:              # chronological, like the main sheet
+            _nsd = parse_dates(out["Date"])
+            out = out.loc[pd.concat([_nsd[_nsd.notna()].sort_values(kind="stable"),
+                                     _nsd[_nsd.isna()]]).index].reset_index(drop=True)
+    return out
+
+
 def combined_workbook(summaries: dict[str, pd.DataFrame],
                       profit_df: pd.DataFrame,
                       ar_df: pd.DataFrame | None = None,
@@ -2368,6 +2400,7 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
                       vertical: str | None = None,
                       reco_ships: set | None = None,
                       rc_ns_summary: pd.DataFrame | None = None,
+                      ns_only: bool = False,
                       op_cost_bills: pd.DataFrame | None = None,
                       acct_txn_df: pd.DataFrame | None = None,
                       cn_df: pd.DataFrame | None = None,
@@ -2713,6 +2746,13 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
                 [OPCOST_COST_SOURCE, AFR_OPCOST_COST_SOURCE])
 
         _ocrows = _rep[_oc_of(_rep)]                       # manual Op-Cost line items
+        # STANDALONE Without-Samsung workbook: narrow the whole detail to the
+        # non-Samsung Re-Commerce subset BEFORE the sheets are cut, so Details,
+        # Supplier/Buyer metrics and the FY cross-check all describe the same rows
+        # as the Summary. Without this the Details sheet would still carry Samsung
+        # (it is built from the ACCUMULATED store, not from `profit_df`).
+        if ns_only:
+            _rep = _rc_ns_detail(_rep, _dbm)
         _main = _rep[~_fu_of(_rep) & ~_oc_of(_rep)]        # keep both out of the main table
         _fu = _live_src[_fu_of(_live_src)]
         if len(_fu) and vertical:
@@ -2758,25 +2798,10 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
         # genuinely-new non-Samsung shipments the store doesn't know. Falls
         # back to a plain vendor filter when no store exists. Nothing in the
         # existing sheets moves.
-        if rc_ns_summary is not None and len(_main):
-            _ns_cat = _main.iloc[:, 85].astype(str)
-            _ns_rc = _ns_cat.str.contains(r"re-commerce|recommerce", case=False, na=False)
-            _ns_sup = _main.iloc[:, 4].astype(str).str.strip().str.lower()
-            _ns = _main[_ns_rc & ~_ns_sup.str.startswith("samsung")]
-            try:
-                _ns_manual = _dbm.load_recommerce_manual(False) if _dbm is not None else None
-            except Exception:
-                _ns_manual = None
-            if _ns_manual is not None and len(_ns_manual):
-                _ns = apply_recommerce_manual(_ns, _ns_manual)
-                if "Row Source" in _ns.columns:
-                    _rsrc = _ns["Row Source"].astype(str)
-                    _ns.loc[_rsrc.isin(["", "nan", "None"]) | _ns["Row Source"].isna(),
-                            "Row Source"] = "Manual (No-Samsung file)"
-                if "Date" in _ns.columns:      # chronological, like the main sheet
-                    _nsd = parse_dates(_ns["Date"])
-                    _ns = _ns.loc[pd.concat([_nsd[_nsd.notna()].sort_values(kind="stable"),
-                                             _nsd[_nsd.isna()]]).index].reset_index(drop=True)
+        # Skipped when ns_only — the whole workbook is already that subset, so a
+        # second identical sheet would be redundant.
+        if rc_ns_summary is not None and not ns_only and len(_main):
+            _ns = _rc_ns_detail(_main, _dbm)
             _ns.to_excel(w, sheet_name="Details (No Samsung)", index=False,
                          startrow=1)   # row 1 = colored group header
             _add_group_header(w.sheets["Details (No Samsung)"], list(_ns.columns))

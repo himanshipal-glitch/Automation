@@ -12,6 +12,52 @@ vertical against its signed-off manual file before rollout.
 
 ---
 
+## 2026-07-30 · Re-Commerce: a separate download per view
+
+The Re-Commerce tab shows TWO summaries (regular + Without Samsung) but had ONE
+download button, which bundled both into a single file. It now has two.
+
+- **Button 1 — combined** (unchanged): both summary blocks, `Details` (all
+  Re-Commerce) and the additive `Details (No Samsung)` sheet.
+- **Button 2 — Without Samsung only** (new): `combined_workbook(..., ns_only=True)`
+  → `profitability_Re-Commerce_without_Samsung.xlsx`, whose Summary AND Details
+  both describe the non-Samsung subset alone, so the file stands on its own when
+  shared. Receivables/Payables are company-wide, so identical in both.
+
+### The trap this hit — read before touching it
+
+The first attempt just passed a pre-filtered frame as `profit_df`. **That silently
+did nothing**: the Details sheet is built from `db.profit_details_view()` — the
+ACCUMULATED store merged with the current upload — not from `profit_df`. The
+workbook would have carried a "Without Samsung" Summary over a Details sheet that
+still contained all 1,417 Samsung rows. Caught only by counting rows in the built
+file. **Filtering `profit_df` does NOT filter the Details sheet.**
+
+`ns_only` therefore narrows `_rep` (after reco exclusions / orphan ordering /
+custom-duty injection, before the sheets are cut) so Details, Supplier/Buyer metrics
+and the FY cross-check all describe the same rows as the Summary.
+
+### One definition, so the two outputs cannot drift
+
+The subset logic — Re-Commerce rows whose vendor doesn't start with "Samsung",
+overlaid with the signed-off without-Samsung manual store, date-ordered — was
+inlined in the `Details (No Samsung)` block. It is now the module-level
+`_rc_ns_detail(df, dbm)`, called by **both** that sheet and the `ns_only` path.
+
+### Verification
+
+| | Details rows | Samsung-vendor rows |
+|---|---|---|
+| Combined workbook | 1,872 | 1,417 |
+| Standalone Without-Samsung | **759** | **0** |
+
+The standalone workbook's `Details` is row-for-row identical to the combined
+workbook's `Details (No Samsung)` sheet (759 = 759) — the shared-helper guarantee,
+checked on the built bytes rather than assumed. Sheet lists confirm `ns_only`
+correctly suppresses the now-redundant `Details (No Samsung)` sheet.
+
+---
+
 ## 2026-07-28 · VERIFIED, NO CHANGE — Last Year "Closing Provision" formula
 
 Asked to change it to

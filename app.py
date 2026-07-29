@@ -2114,16 +2114,21 @@ elif page == "Summary Report":
         # frozen.RC_NOSAMSUNG_FROZEN; the open month is live. The regular
         # Re-Commerce summary above is computed exactly as before — untouched.
         _rc_ns = None
+        # the NS detail frame + its full summaries dict are kept so the Re-Commerce
+        # tab can offer a STANDALONE Without-Samsung workbook alongside the combined
+        # one (two views on screen → two downloads).
+        _rc_ns_pdf = _s_ns = None
         try:
             if "Re-Commerce" in summaries:
+                _rc_ns_pdf = reports.rc_without_samsung(_sel_pdf)
                 _s_ns = reports.summaries_by_category(
-                    reports.rc_without_samsung(_sel_pdf), _ar, _ap,
+                    _rc_ns_pdf, _ar, _ap,
                     op_cost_bills=_obills, reco_ships=reco_ships, acct_txn_df=_atxn)
                 _rc_ns = _s_ns.get("Re-Commerce")
                 if _rc_ns is not None:
                     _frozen.apply_rc_nosamsung(_rc_ns, _open_m)
         except Exception as _nse:
-            _rc_ns = None
+            _rc_ns = _rc_ns_pdf = _s_ns = None
             st.caption(f"⚠ Without-Samsung Re-Commerce view skipped: {_nse}")
         if _rc_ns is not None:
             st.session_state["_recy_summaries"] = {
@@ -2172,6 +2177,29 @@ elif page == "Summary Report":
                         )
                     except Exception as _we:
                         st.warning(f"Couldn't build the {name} workbook: {_we}")
+                # Re-Commerce shows TWO summaries on this tab, so it gets TWO
+                # downloads. The button above is the COMBINED file (both summary
+                # blocks + a 'Details (No Samsung)' sheet); this one is the
+                # Without-Samsung view on its OWN — its Summary and Details cover
+                # only the non-Samsung subset, so the sheet stands alone when shared.
+                # Receivables/Payables are company-wide, so they are identical in both.
+                if name == "Re-Commerce" and _rc_ns is not None and _s_ns is not None:
+                    try:
+                        _wb_ns = _cwb(
+                            _s_ns, _sel_pdf, _ar, _ap, vertical="Re-Commerce",
+                            reco_ships=reco_ships, ns_only=True,
+                            op_cost_bills=_obills,
+                            acct_txn_df=_atxn, cn_df=_cn, dn_df=_dn, bill_df=_bill)
+                        st.download_button(
+                            "⬇ Download Re-Commerce — Without Samsung "
+                            "(Excel — Summary · Receivables · Payables · Report)",
+                            _wb_ns,
+                            file_name="profitability_Re-Commerce_without_Samsung.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="dl_comb_rc_nosamsung",
+                        )
+                    except Exception as _we2:
+                        st.warning(f"Couldn't build the Without-Samsung workbook: {_we2}")
 
         # ── Reco Items — the review is a GATE shown BEFORE the summary (above),
         # and (once everything's reviewed) an editable expander right under the

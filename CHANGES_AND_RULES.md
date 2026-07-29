@@ -12,6 +12,39 @@ vertical against its signed-off manual file before rollout.
 
 ---
 
+## 2026-07-28 · VERIFIED, NO CHANGE — Last Year "Closing Provision" formula
+
+Asked to change it to
+`Closing Provision = provision − (Accounted in FY 2026-27 + NO DN value)`.
+**It already computes exactly that** — no edit was made. Recorded so the formula is
+not "fixed" into something wrong later.
+
+Both paths in `reports.py` → `combined_workbook` are correct:
+
+- stored figures: `_close = round(_provcell - _acct - _nodncell, 2)`
+- blank/manual: a live Excel formula `=<prov> - <accounted> - <noDN>`
+
+`p − a − n` is algebraically identical to `p − (a + n)`.
+
+Checked against `Profitability Report of End Generator till 19-07-2026.xlsx`:
+
+| block | provision | accounted | NO DN | computed | manual closing | diff |
+|---|---|---|---|---|---|---|
+| DN | 6,275,044.32 | 2,455,994.161017 | 420,633.304 | 3,398,416.854983 | 3,398,416.854983 | **0.00** |
+| CN | 10,302,843.00 | 6,368,645.750000 | 429,599.534 | 3,504,597.716000 | 3,504,597.716000 | **0.00** |
+| Logistics | 1,092,270.00 | 1,102,034.500000 | 0.000 | −9,764.500000 | −9,764.500000 | **0.00** |
+
+Logistics going **negative** (−9,764.50) is correct and expected: more was accounted
+in FY 26-27 than was provided for, so the provision is over-consumed.
+
+The live-formula cell references were checked too: the summary is written at
+`startrow=_top+1` **with** a header row, so its data lands on Excel rows
+`_top+3 / +4 / +5`, which is what `_rowP, _rowA, _rowN` point at; and
+`_gcl(_c0 + 3)` resolves to the Amount column (1-based letter over a 0-based
+`startcol`). Do not "off-by-one" these.
+
+---
+
 ## 2026-07-28 · Release: what went to GitHub, and what deliberately did not
 
 Commit **`2cd90ad`** on `main` — `reports.py` (+134/−2) · `CHANGES_AND_RULES.md` ·
@@ -94,6 +127,20 @@ Factor distribution over every Last Year DN note, all verticals:
 (`SH04261801`, `SH06260604`, `SH072616016`, `SHMPIB0001`) are all FY 26-27
 shipments, so they sit in Details and are excluded from "last year" by definition.
 Those two rates remain coded to spec and **verified against nothing**.
+
+**DECISION (28-07-2026, owner): keep the logic, do not remove it.** TDS cases are
+expected in future periods, and the rule is cheapest to capture now while the spec
+is fresh. It is dormant, not dead — `_ly_tax_factor` needs no change to activate:
+the moment a TDS-bearing note belongs to a shipment that is NOT in the current
+Details, it will be picked up and valued at 1.16 (IGST TDS) or 1.08 (CGST/SGST TDS)
+automatically.
+
+**When that first happens, verify it before trusting the figure** — it will be the
+first time either rate has ever been exercised. Reconcile that one note against the
+vertical's manual file and record the result here. Concretely: as prior-year
+shipments age out of Details, notes like `36/MET/27VC00052`, `36/IB/27VC00002`,
+`36/MET/27VC00111` and `36/MET/27VC00123` (all carrying `IGST TDS Payable-2%`) are
+the candidates to watch.
 
 ### OPEN — AFR / ReWerse / IB produce rows their manuals do not
 

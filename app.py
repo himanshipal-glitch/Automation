@@ -2175,6 +2175,11 @@ elif page == "Summary Report":
             _sel = _labels[0]
         _sel_pdf = _variants[_sel]
         summaries = _build(_sel_pdf)
+        # Absolute 'Transportation Charges' row (above Operational Cost), matching the
+        # manual. DERIVED (GM − NM − OC) and added AFTER apply_frozen + the Enterprise
+        # op-cost override, so the 29-row freeze layout is never disturbed. One place
+        # → feeds the on-screen tables, the workbook, email and Recy alike.
+        summaries = {k: reports.insert_transport_row(v) for k, v in summaries.items()}
         st.session_state["_recy_summaries"] = summaries
 
         # Cached workbook builder — reuse bytes across reruns when nothing that
@@ -2219,6 +2224,10 @@ elif page == "Summary Report":
                 _rc_ns = _s_ns.get("Re-Commerce")
                 if _rc_ns is not None:
                     _frozen.apply_rc_nosamsung(_rc_ns, _open_m)
+                    # same derived transport row; keep _s_ns in sync so the
+                    # standalone Without-Samsung workbook carries it too.
+                    _rc_ns = reports.insert_transport_row(_rc_ns)
+                    _s_ns["Re-Commerce"] = _rc_ns
         except Exception as _nse:
             _rc_ns = _rc_ns_pdf = _s_ns = None
             st.caption(f"⚠ Without-Samsung Re-Commerce view skipped: {_nse}")

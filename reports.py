@@ -1783,6 +1783,49 @@ def summary_report(profit_df: pd.DataFrame,
     return pd.DataFrame(data)
 
 
+def insert_transport_row(df: pd.DataFrame) -> pd.DataFrame:
+    """Add an absolute 'Transportation Charges' (₹) row directly ABOVE
+    'Operational Cost', matching the manual's layout.
+
+    DISPLAY-ONLY and DERIVED — it changes no computed figure. The value per column
+    is Gross Margin − Net Margin − Operational Cost, the exact identity by which Net
+    Margin is defined here (`nm = gm − tc − oc`), so it holds for live, open and
+    frozen months alike: for a frozen month GM/NM/OC are the signed-off manual
+    values, so GM − NM − OC recovers the manual's own transport figure (e.g. AFR
+    Apr-26 → 54,711).
+
+    MUST run LAST — after apply_frozen / _recompute_fy and the Enterprise op-cost
+    override, all of which index the fixed 29-row layout by POSITION. Inserting the
+    row earlier would shift those indices and silently corrupt frozen months.
+    Idempotent, and a no-op if any of the three source rows is absent."""
+    if df is None or "Metric" not in df.columns:
+        return df
+    labels = df["Metric"].astype(str).tolist()
+    if "Transportation Charges" in labels:            # already added — idempotent
+        return df
+
+    def _row(label):
+        hit = df[df["Metric"].astype(str) == label]
+        return hit.iloc[0] if len(hit) else None
+
+    gm, nm, oc = _row("Gross Margin"), _row("Net Margin"), _row("Operational Cost")
+    if gm is None or nm is None or oc is None:
+        return df
+
+    cols = [c for c in df.columns if c != "Metric"]
+
+    def _num(r, c):
+        return pd.to_numeric(pd.Series([r[c]]), errors="coerce").fillna(0.0).iloc[0]
+
+    tc = {"Metric": "Transportation Charges"}
+    for c in cols:
+        tc[c] = round(_num(gm, c) - _num(nm, c) - _num(oc, c), 0)
+
+    pos = labels.index("Operational Cost")            # sit just above Operational Cost
+    return pd.concat([df.iloc[:pos], pd.DataFrame([tc]), df.iloc[pos:]],
+                     ignore_index=True)
+
+
 # ── Per-vertical receivables attribution (for DSO) ────────────────────────────
 _AR_TOKEN_TAB = [
     ("rew", "ReWerse"), ("met", "End Generator"), ("rec", "Re-Commerce"),
@@ -2193,10 +2236,15 @@ def top_materials(profit_df: pd.DataFrame, tab: str, n: int = 5):
     return pd.DataFrame(rows), month, share
 
 
-# Summary row positions (0-indexed into SUMMARY_METRICS) highlighted in every
-# vertical block: Gross/Net Margin % (4, 7) + the Receivable/Payable parent rows
-# and their FY27/Old splits.
-_SUMMARY_HIGHLIGHT_ROWS = [4, 7, 16, 17, 18, 20, 21, 22]
+# Summary rows highlighted in every vertical block, matched by LABEL so an added
+# row (e.g. the derived 'Transportation Charges') never mis-aligns the styling:
+# Gross/Net Margin % + the Receivable/Payable parent rows and their FY27/Old splits.
+_SUMMARY_HIGHLIGHT_LABELS = {
+    "Gross Margin (%)", "Net Margin (%)",
+    "Receivables (exl Legacy)", "FY 27 Receivables",
+    "Old Receivables (pre-Apr, exl Legacy)",
+    "Payable", "FY 27 Payables", "Old Payables (pre-Apr)",
+}
 
 # Indian digit grouping, single (non-conditional) custom format codes: the last
 # explicit comma-group size (2 digits) repeats automatically for any higher
@@ -2208,16 +2256,21 @@ _PCT_FMT = '0.00"%"'           # value is ALREADY the percent number (14.43 = 14
                                 # — a literal suffix, NOT Excel's native % (which
                                 # would multiply by 100 again and show 1443.00%).
 
-# Per-row (0-indexed into SUMMARY_METRICS, 28 rows) number format for the
-# Summary sheet — known exactly since every vertical block has this fixed shape.
-_ROW_NUMFMT = {
-    0: _INR_INT,   1: _INR_INT,  2: _INR_INT,  3: _INR_INT,  4: _PCT_FMT,
-    5: _INR_INT,   6: _INR_INT,  7: _PCT_FMT,  8: _INR_INT,  9: _INR_DEC,
-    10: _INR_DEC, 11: _INR_DEC, 12: _INR_INT, 13: _INR_INT, 14: _INR_INT,
-    15: _INR_INT, 16: _INR_INT, 17: _INR_INT, 18: _INR_INT, 19: _INR_INT,
-    20: _INR_INT, 21: _INR_INT, 22: _INR_INT, 23: _INR_INT, 24: _INR_INT,
-    25: _INR_INT, 26: _PCT_FMT, 27: _INR_INT, 28: _PCT_FMT,
-}
+# Number format per Summary row, matched by LABEL (robust to inserted rows).
+# Percent rows show a literal-% number; per-kg rows carry 2 decimals; everything
+# else — money, counts, days, and the absolute Transportation Charges row — is a
+# whole Indian-grouped integer.
+_PCT_LABELS = {"Gross Margin (%)", "Net Margin (%)",
+               "Credit Notes (% to Revenue)", "Debit Notes (% to Purchase)"}
+_DEC_LABELS = {"Revenue Per Kg", "Purchase Cost Per Kg", "Transportation Charges Per Kg"}
+
+
+def _summary_row_fmt(label: str) -> str:
+    if label in _PCT_LABELS:
+        return _PCT_FMT
+    if label in _DEC_LABELS:
+        return _INR_DEC
+    return _INR_INT
 
 
 def _style_workbook(raw: bytes, headers: list[tuple[str, int]],
@@ -2466,11 +2519,10 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
             df.to_excel(w, sheet_name="Summary", startrow=row + 1, index=False)
             _hdr_row = row + 2   # 1-indexed excel row of this block's header
             _headers.append(("Summary", _hdr_row))
-            for _i in _SUMMARY_HIGHLIGHT_ROWS:
-                if _i < len(df):
+            for _i, _lab in enumerate(df["Metric"].astype(str)):
+                if _lab in _SUMMARY_HIGHLIGHT_LABELS:
                     _highlights.append(("Summary", _hdr_row + 1 + _i))
-            for _i in range(len(df)):
-                _numfmt.append(("Summary", _hdr_row + 1 + _i, _ROW_NUMFMT.get(_i, _INR_DEC)))
+                _numfmt.append(("Summary", _hdr_row + 1 + _i, _summary_row_fmt(_lab)))
             row += len(df) + 3
 
         # ── Sheet 2: Receivables (build-up table + Legacy box + detail) ───────

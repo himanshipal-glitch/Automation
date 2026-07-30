@@ -12,6 +12,56 @@ vertical against its signed-off manual file before rollout.
 
 ---
 
+## 2026-07-30 · Summary: absolute "Transportation Charges" row (above Operational Cost)
+
+The summary showed only *Transportation Charges Per Kg*; the manual also has an
+absolute ₹ row above Operational Cost (e.g. AFR Apr-26 = 54,711). Added it.
+
+### How the value is derived — and why it is exact
+
+Per column: **Transportation Charges = Gross Margin − Net Margin − Operational
+Cost**. That is the identity by which Net Margin is defined in `_summary_block`
+(`nm = gm − tc − oc`), so it holds for live, open and frozen months alike. For a
+frozen month GM/NM/OC are the signed-off manual values, so GM − NM − OC recovers the
+manual's own transport figure — AFR Apr-26 came out to 54,711 exactly.
+
+The engine already computed `tc` (Σ Logistics_Cost + AFR blank-CFSO transport
+override) but only emitted the per-kg form. This surfaces the absolute value; it
+does not recompute anything.
+
+### Why it is done as a LAST, derived step — NOT a new SUMMARY_METRICS entry
+
+Inserting into `SUMMARY_METRICS` at position 5 would renumber ~50 hardcoded row
+indices across `_summary_block`, the FY/split splice, the open-month rebalance,
+`_metric_idx`, `_round_cell` (`_RATIO2`/`_COUNTS`), `frozen._recompute_fy`
+(g(5),g(6),g(19),g(23),…) and `app._apply_ent_opcost` (g/iat 5,6,7). A single missed
+shift silently corrupts a frozen month — the #1 hard rule. So the freeze layout is
+left at 29 rows, entirely untouched, and `reports.insert_transport_row(df)` adds the
+row as the FINAL step, AFTER apply_frozen and the Enterprise op-cost override.
+
+Applied once in `app.py` to every summary in the dict (and to the Without-Samsung
+summary), so it flows to the on-screen tables, the workbook, email and Recy from a
+single call. Idempotent; no-op if GM/NM/OC are absent.
+
+### Workbook formatting made label-based (robustness, not fragility)
+
+`_style_workbook`'s Summary number-format and highlight maps were keyed by ROW
+POSITION (`_ROW_NUMFMT`, `_SUMMARY_HIGHLIGHT_ROWS`). An inserted row would have
+mis-aligned every format below it. Replaced with label lookups (`_summary_row_fmt`,
+`_SUMMARY_HIGHLIGHT_LABELS`) — immune to this and any future row change. Values are
+untouched; this is styling only.
+
+### Verification
+
+- AFR Apr-26 transport = **54,711** (manual 54,711); FY Total 54,711; sits directly
+  above Operational Cost, on screen and in the workbook.
+- **Regression: no existing summary value moved** in ANY vertical after the insert
+  (every original row compared cell-by-cell, all months + FY).
+- Workbook: Transportation Charges renders as ₹ integer; the % rows still carry the
+  literal-% format; row order correct.
+
+---
+
 ## 2026-07-30 · Manual shipment exclusions (new feature)
 
 A rule-free, user-maintained kill-list for shipments the engine cannot reasonably

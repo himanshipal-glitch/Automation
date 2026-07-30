@@ -12,6 +12,69 @@ vertical against its signed-off manual file before rollout.
 
 ---
 
+## 2026-07-30 · Manual shipment exclusions (new feature)
+
+A rule-free, user-maintained kill-list for shipments the engine cannot reasonably
+detect on its own. Added at finance's request for the Plastic DRS orders.
+
+**Deliberately has no logic.** The `Reason` column is the ONLY audit trail — that is
+the whole design. Do not try to infer a rule from its contents.
+
+- Store: `persistent/manual_exclusions.parquet`, columns
+  `Vertical · Shipment ID · Reason · Exclude`. GitHub-synced, kept until changed.
+- Scoped by **(Shipment ID, Vertical)** — the same id under another vertical is
+  untouched, so an exclusion can never silently reach further than intended.
+- UI on the Summary page: search (optionally filtered by vertical) → tick → add;
+  plus an editable table with a Reason column and an `Exclude` checkbox, so a
+  shipment can be re-included later without losing the note.
+- `Exclude` unticked keeps the row but stops excluding — history is never lost.
+
+### Applied in TWO places — both are required
+
+`reports.drop_manual_exclusions()` is called from:
+
+1. `app.py`, on `profit_df` before the summaries → summary rows and **FY Total**
+2. `combined_workbook`, on `_rep` → the **Details sheet**
+
+The second is NOT optional. Details is rebuilt from the accumulated store
+(`db.profit_details_view`), so an excluded row would otherwise reappear there while
+the summary had already dropped it — the workbook would contradict its own summary.
+Same trap documented under the Re-Commerce entry below.
+
+### Seeded (30-07-2026, per finance)
+
+`36/MPPET/27/OFF/0001` and `36/MPPET/27/OFF/0002`, both Plastic — DRS orders
+(District Tourism Development Officer, Rudraprayag), not Plastic sales.
+
+Note `0002` is dated 26-Jul, i.e. AFTER the 19-Jul MIS cutoff, so it only takes
+effect from the next export. The entry is stored now and will bite when it appears.
+
+### Verification
+
+Only the intended row moved: detail `2,618 → 2,617`; the Plastic `/OFF/` row gone;
+the AFR (`MP/AFR/OFF/0001`, `/0002`) and IT AD (`36/ITAD/27/OFF/0001`,
+`36/IAD/27/OFF/0001`) `/OFF/` rows **untouched**, confirming the vertical scoping.
+Workbook Details sheet: 0 `/OFF/` rows.
+
+### Consequence worth knowing — it exposed a real problem
+
+Plastic Jun-26 Sales went `53,105 → −34,937`. That is **not** caused by the
+exclusion; it is revealed by it. Plastic June holds only two rows: the DRS order
+(Amount 168,000, Net Revenue 88,042 after its own 79,958 CN) and `SH012631015`
+(Amount 20,090 carrying ~55,027 of credit notes). `20,090 − 55,027 = −34,937`.
+
+`SH012631015` is a **January-2026 (prior-FY) shipment** that should not be in
+Details at all — it is exactly the defect reported as "previous year shipments in
+plastic came in details sheet". Fixing that moves it to the Last Year sheet and
+Plastic June empties instead of going negative. **Do not chase the negative
+separately — it closes when the prior-FY routing is fixed.**
+
+July also shifts when a June shipment is excluded. That is the documented residual
+mechanism (open month = pre-freeze FY − Σ frozen priors) and is expected —
+confirmed with the owner on 30-07-2026.
+
+---
+
 ## 2026-07-30 · Re-Commerce: a separate download per view
 
 The Re-Commerce tab shows TWO summaries (regular + Without Samsung) but had ONE

@@ -2361,6 +2361,37 @@ def _style_workbook(raw: bytes, headers: list[tuple[str, int]],
     return out.getvalue()
 
 
+def drop_manual_exclusions(df: pd.DataFrame, pairs: set | None = None) -> pd.DataFrame:
+    """Remove rows the user has manually excluded, matched on
+    (Broad Category, Shipment ID) — so the same id under another vertical is left
+    alone. Returns `df` untouched when there is nothing to exclude.
+
+    MUST be applied in BOTH places or the workbook contradicts the summary:
+      1. `app.py`, to profit_df before the summaries are built  → summary/FY Total
+      2. `combined_workbook`, to `_rep`                          → Details sheet
+    The second is not optional: the Details sheet is rebuilt from the ACCUMULATED
+    store (`db.profit_details_view`), so an excluded row would otherwise reappear
+    there even though the summary had dropped it."""
+    if pairs is None:
+        try:
+            import database as _dbx
+            pairs = _dbx.manual_exclusion_pairs()
+        except Exception:
+            pairs = set()
+    if not pairs or df is None or not len(df) or df.shape[1] <= 85:
+        return df
+    _ship = df.iloc[:, 3].astype(str).str.strip().str.upper()
+    _cat = df.iloc[:, 85].astype(str).map(_canon_label).astype(str).str.strip().str.lower()
+    # match on the canonical label AND the raw one, so a stored 'Metal' exclusion
+    # still bites after the vertical was renamed to 'End Generator'
+    _raw = df.iloc[:, 85].astype(str).str.strip().str.lower()
+    _key1 = list(zip(_cat, _ship))
+    _key2 = list(zip(_raw, _ship))
+    _hit = pd.Series([(a in pairs) or (b in pairs) for a, b in zip(_key1, _key2)],
+                     index=df.index)
+    return df[~_hit]
+
+
 def _rc_ns_detail(df: pd.DataFrame, dbm=None) -> pd.DataFrame:
     """The WITHOUT-SAMSUNG Re-Commerce detail: Re-Commerce rows whose VENDOR name
     doesn't start with 'Samsung', overlaid with the signed-off without-Samsung
@@ -2753,6 +2784,10 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
         # (it is built from the ACCUMULATED store, not from `profit_df`).
         if ns_only:
             _rep = _rc_ns_detail(_rep, _dbm)
+        # Manually excluded shipments — applied HERE as well as in app.py, because
+        # this sheet is rebuilt from the accumulated store and would otherwise
+        # re-introduce rows the summary has already dropped.
+        _rep = drop_manual_exclusions(_rep)
         _main = _rep[~_fu_of(_rep) & ~_oc_of(_rep)]        # keep both out of the main table
         _fu = _live_src[_fu_of(_live_src)]
         if len(_fu) and vertical:

@@ -580,6 +580,72 @@ def manual_lines_count() -> int:
     return len(load_manual_lines())
 
 
+# ── Manually excluded shipments (persistent) ──────────────────────────────────
+# A user-maintained kill-list: a shipment named here is dropped from its vertical's
+# Details, and therefore from every figure derived from it (summary rows, FY Total,
+# per-kg, supplier/buyer metrics). Deliberately RULE-FREE — it exists for shipments
+# the engine cannot reasonably detect on its own (e.g. the Plastic DRS orders), so
+# the Reason column is the only audit trail. GitHub-synced. Kept until changed.
+#
+# Scoped by (Shipment ID, Vertical): the same id under a different vertical is NOT
+# touched, so an exclusion can never silently reach beyond where it was intended.
+MANUAL_EXCL_PATH = PERSIST_DIR / "manual_exclusions.parquet"
+MANUAL_EXCL_COLS = ["Vertical", "Shipment ID", "Reason", "Exclude"]
+
+
+def _manual_excl_key(df: pd.DataFrame) -> pd.Series:
+    return (df["Vertical"].astype(str).str.strip().str.lower() + "||"
+            + df["Shipment ID"].astype(str).str.strip().str.upper())
+
+
+def save_manual_exclusions(rows: pd.DataFrame) -> int:
+    """UPSERT exclusions by (Vertical · Shipment ID). Entries absent from `rows`
+    keep their stored state, so a shipment that has dropped out of the current MIS
+    does not lose its decision. `rows` columns: MANUAL_EXCL_COLS."""
+    if rows is None or getattr(rows, "empty", True):
+        return manual_exclusions_count()
+    new = rows.copy()
+    new.columns = [str(c) for c in new.columns]
+    new = new.reindex(columns=MANUAL_EXCL_COLS)
+    new["Exclude"] = new["Exclude"].fillna(True).astype(bool)
+    new["Reason"] = new["Reason"].fillna("").astype(str)
+    new = new[new["Shipment ID"].astype(str).str.strip().ne("")]
+    cur = _load_small(MANUAL_EXCL_PATH)
+    if not cur.empty:
+        cur = cur.reindex(columns=MANUAL_EXCL_COLS)
+        keep = cur[~_manual_excl_key(cur).isin(set(_manual_excl_key(new)))]
+        out = pd.concat([keep, new], ignore_index=True)
+    else:
+        out = new
+    return _save_small(out, MANUAL_EXCL_PATH,
+                       sync_msg="Update manually excluded shipments (app entry)")
+
+
+def load_manual_exclusions() -> pd.DataFrame:
+    d = _load_small(MANUAL_EXCL_PATH)
+    if d.empty:
+        return pd.DataFrame(columns=MANUAL_EXCL_COLS)
+    d = d.reindex(columns=MANUAL_EXCL_COLS)
+    d["Exclude"] = d["Exclude"].fillna(True).astype(bool)
+    d["Reason"] = d["Reason"].fillna("").astype(str)
+    return d
+
+
+def manual_exclusion_pairs() -> set:
+    """{(vertical_lower, SHIPMENT_UPPER)} for entries whose Exclude is ticked."""
+    d = load_manual_exclusions()
+    if d.empty:
+        return set()
+    on = d[d["Exclude"].astype(bool)]
+    return set(zip(on["Vertical"].astype(str).str.strip().str.lower(),
+                   on["Shipment ID"].astype(str).str.strip().str.upper()))
+
+
+def manual_exclusions_count() -> int:
+    d = load_manual_exclusions()
+    return int(d["Exclude"].astype(bool).sum()) if len(d) else 0
+
+
 # ── Reco-review decisions (persistent) ────────────────────────────────────────
 # Remembers, per line-item key (Shipment ID · Invoice No · Material), whether the
 # user chose to EXCLUDE it (keep it in Reco Items). Persisted so a re-upload of the

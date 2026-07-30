@@ -2004,6 +2004,98 @@ elif page == "Summary Report":
         if not _ml_store.empty:
             profit_df = reports.inject_manual_line_items(profit_df, _ml_store)
 
+        # ── 🚫 Manually excluded shipments ───────────────────────────────────
+        # A rule-free kill-list for shipments the engine can't reasonably detect
+        # itself (e.g. the Plastic DRS orders). Applied to profit_df HERE so every
+        # summary figure and the FY Total drop them; combined_workbook applies the
+        # same list to its Details sheet (it rebuilds from the accumulated store,
+        # so it would otherwise put the rows back).
+        _exc_store = db.load_manual_exclusions()
+        st.markdown("#### 🚫 Manually excluded shipments")
+        st.caption("Shipments listed here are removed from their vertical's **Details**, "
+                   "and therefore from Sales, Purchases, margins, per-kg figures and the "
+                   "**FY Total**. There is no rule behind this — the **Reason** is the only "
+                   "audit trail, so please fill it in. Untick *Exclude* to re-include a "
+                   "shipment without losing the note.")
+        st.caption(_durability_note)
+
+        _ex_c1, _ex_c2 = st.columns([2, 3])
+        with _ex_c1:
+            _ex_q = st.text_input("🔍 Search a shipment to exclude",
+                                  key="excl_search",
+                                  placeholder="e.g. 36/MPPET/27/OFF or SH0426")
+        with _ex_c2:
+            _ex_vfilter = st.multiselect(
+                "Filter the search by vertical", sorted(summaries.keys()),
+                key="excl_vfilter",
+                help="Leave empty to search every vertical.")
+
+        if _ex_q and _ex_q.strip():
+            try:
+                _cand_ship = profit_df.iloc[:, 3].astype(str).str.strip()
+                _cand_cat = profit_df.iloc[:, 85].astype(str).map(reports._canon_label).astype(str)
+                _m = _cand_ship.str.contains(_ex_q.strip(), case=False, na=False, regex=False)
+                if _ex_vfilter:
+                    _m &= _cand_cat.isin(_ex_vfilter)
+                _found = (pd.DataFrame({"Vertical": _cand_cat[_m], "Shipment ID": _cand_ship[_m]})
+                          .drop_duplicates().sort_values(["Vertical", "Shipment ID"]))
+                if len(_found):
+                    st.caption(f"{len(_found)} matching shipment(s) — tick to add them to the list below.")
+                    _found["Add"] = False
+                    _picked = st.data_editor(
+                        _found, hide_index=True, use_container_width=True,
+                        disabled=["Vertical", "Shipment ID"], key="excl_found",
+                        column_config={"Add": st.column_config.CheckboxColumn(
+                            "Add", help="Tick, then press Add selected")})
+                    if st.button("➕ Add selected to the exclusion list", key="excl_add"):
+                        _sel = _picked[_picked["Add"].fillna(False).astype(bool)]
+                        if len(_sel):
+                            _new = pd.DataFrame({
+                                "Vertical": _sel["Vertical"].values,
+                                "Shipment ID": _sel["Shipment ID"].values,
+                                "Reason": "", "Exclude": True})
+                            db.save_manual_exclusions(_new)
+                            st.success(f"Added {len(_sel)} shipment(s) — add a Reason below, then Save.")
+                            st.rerun()
+                        else:
+                            st.info("Nothing ticked.")
+                else:
+                    st.info("No shipment matches that search in the current data.")
+            except Exception as _exs:
+                st.warning(f"Couldn't run the shipment search: {_exs}")
+
+        _ex_seed = (_exc_store if not _exc_store.empty
+                    else pd.DataFrame(columns=db.MANUAL_EXCL_COLS))
+        _ex_edit = st.data_editor(
+            _ex_seed, num_rows="dynamic", use_container_width=True, hide_index=True,
+            key="excl_editor",
+            column_config={
+                "Vertical": st.column_config.SelectboxColumn(
+                    "Vertical", options=sorted(summaries.keys()), required=True),
+                "Shipment ID": st.column_config.TextColumn("Shipment ID", required=True),
+                "Reason": st.column_config.TextColumn(
+                    "Reason", help="Why is this excluded? e.g. 'DRS order — not a Plastic sale'"),
+                "Exclude": st.column_config.CheckboxColumn(
+                    "Exclude", help="Untick to re-include without deleting the entry"),
+            })
+        if st.button("💾 Save exclusions", key="excl_save"):
+            try:
+                db.save_manual_exclusions(_ex_edit)
+                if db.LAST_SYNC_OK is False:
+                    st.warning(db.LAST_SYNC_ERR)
+                st.success("Saved — the summary and Details now reflect this list.")
+                st.rerun()
+            except Exception as _exe:
+                st.error(f"Couldn't save the exclusions: {_exe}")
+
+        _excl_pairs = db.manual_exclusion_pairs()
+        if _excl_pairs:
+            _before = len(profit_df)
+            profit_df = reports.drop_manual_exclusions(profit_df, _excl_pairs)
+            st.caption(f"🚫 {len(_excl_pairs)} shipment(s) manually excluded — "
+                       f"{_before - len(profit_df)} detail row(s) removed from the "
+                       f"summary, FY Total and Details sheet.")
+
         # Last Year Shipments preview removed from the frontend (of no use on-screen).
         # The 'Last Year Shipments' sheet is still built into every downloaded
         # workbook from _cn/_dn/_bill/_atxn via reports.combined_workbook.

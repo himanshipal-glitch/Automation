@@ -12,6 +12,62 @@ vertical against its signed-off manual file before rollout.
 
 ---
 
+## 2026-07-30 · Prior-FY shipments routed to the Last Year sheet
+
+Previous-financial-year shipments were appearing in the current Details/summary
+(finance flagged Plastic `SH012631015`, `SH022606031`, …). They belong to last year.
+
+### The rule
+
+A shipment id is `SH` + MM + YY + sequence (e.g. `SH032630013` = Mar-2026). The
+Indian FY starts **1 April**, so a shipment whose own month/year predates this
+April is **prior-FY**. Confirmed against the manuals, whose Details sheets carry
+**zero** prior-FY rows (End Generator 56 current / 0 prior; Plastic 3 / 0).
+
+`reports._ship_prior_fy(id, fy_start_year)` + `_current_fy_start_year(df)` (derived
+from the latest invoice date, so it rolls forward automatically — nothing
+hardcoded to 2026). Unparseable ids (`MP/…`, `/OFF/…`, blank) count as CURRENT and
+are never auto-routed.
+
+### Two coordinated changes
+
+1. **Details / summary / FY** — `reports.drop_prior_fy(df)` removes prior-FY line
+   rows, applied in BOTH places (same rule as `drop_manual_exclusions`):
+   `app.py` on `profit_df` (summary + FY), and `combined_workbook` on `_rep`
+   (Details sheet, rebuilt from the accumulated store).
+2. **Last Year sheet** — its selection changed from "shipment NOT in current
+   Details" to "**every referenced shipment is prior-FY**". The old test missed
+   prior-FY shipments that had received a current-FY invoice (so were in Details);
+   the new one matches the manual directly.
+
+### Why the residual maths makes this a FIX, not a risk
+
+All 14 prior-FY rows in this MIS fall in Apr–Jun (frozen months), none in July. The
+open month is `pre-freeze-FY − Σ frozen priors`; the manual's frozen priors exclude
+these rows while our live FY included them, so they were being **dumped into July**,
+inflating it. Removing them corrects the open month toward the manual.
+
+### Verification
+
+- **End Generator frozen months still tie to the manual** — freeze untouched.
+- End Generator July/FY **unchanged** by the exclusion (its 4 prior-FY Metal rows
+  net ~0), so the existing reconciliation is not disturbed.
+- **Plastic June Sales −34,937 → 88,042** — `SH012631015` (Jan-26, carrying ~55k of
+  CN against 20k of invoice) left Details, removing the negative drag. (The residual
+  88,042 is the DRS order, which the manual-exclusion list also removes.)
+- **Last Year sheet still ties**: End Generator DN 37 notes / 2,435,712.16, all four
+  tables intact.
+- Workbook Details sheet: **0 prior-FY rows** (both application points confirmed).
+
+### Note — the 3 no-reference VC notes
+
+`36/MET/27VC00106/109/110` (which the manual lists) have **`Referenceno = NaN`** in
+the raw MIS — the shipment link exists only in the manual, added by hand. So neither
+the old nor the new rule can attribute them; they remain manual-only, alongside the
+5 legacy `DN`-series rows. Engine + those 8 manual-only rows = the manual's total.
+
+---
+
 ## 2026-07-30 · Summary: absolute "Transportation Charges" row (above Operational Cost)
 
 The summary showed only *Transportation Charges Per Kg*; the manual also has an

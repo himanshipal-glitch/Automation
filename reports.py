@@ -1027,6 +1027,62 @@ def _ly_tax_factor(accounts) -> float:
     return 1.0 + rate
 
 
+# ── Prior-financial-year routing (shipment ID → FY) ───────────────────────────
+# A shipment id is SH + MM + YY + sequence (e.g. SH032630013 = Mar-2026). The
+# Indian FY starts 1-April, so FY 2026-27 spans Apr-2026 … Mar-2027. A shipment
+# whose own month/year predates that April belongs to LAST year: the signed-off
+# manuals carry ZERO prior-FY rows in their Details, and list those shipments'
+# notes on the "Last year's" sheet instead. Unparseable ids (MP/…, /OFF/…, blank)
+# are treated as CURRENT — never auto-routed to last year.
+def _ship_month_year(shipment):
+    import re as _r
+    g = _r.search(r"SH(\d{2})(\d{2})",
+                  str(shipment).upper().replace(" ", "").replace("/", ""))
+    if not g:
+        return None
+    mm, yy = int(g.group(1)), int(g.group(2))
+    return (mm, 2000 + yy) if 1 <= mm <= 12 else None
+
+
+def _ship_prior_fy(shipment, fy_start_year: int) -> bool:
+    """True if `shipment` belongs to a FY before the one starting April
+    `fy_start_year`. Unparseable ids → False (treated as current)."""
+    my = _ship_month_year(shipment)
+    if my is None:
+        return False
+    mm, yr = my
+    return (yr < fy_start_year) or (yr == fy_start_year and mm < 4)
+
+
+def _current_fy_start_year(df) -> int:
+    """Calendar year of the 1-April that opens the FY the data sits in, from the
+    latest invoice date (col 2). Falls back to 2026 if no parseable date."""
+    if df is None or getattr(df, "empty", True) or df.shape[1] < 3:
+        return 2026
+    d = pd.to_datetime(df.iloc[:, 2], errors="coerce")
+    mx = d.max()
+    if pd.isna(mx):
+        return 2026
+    return mx.year if mx.month >= 4 else mx.year - 1
+
+
+def drop_prior_fy(df: pd.DataFrame, fy_start_year: int | None = None) -> pd.DataFrame:
+    """Remove prior-FY shipments from the live detail — they belong to the
+    Last Year sheet, not the current Details / summary / FY total, matching the
+    signed-off manual (0 prior-FY rows in its Details).
+
+    Like drop_manual_exclusions, MUST be applied in BOTH the summary path
+    (app.py, to profit_df) AND combined_workbook (to `_rep`, the Details source
+    rebuilt from the accumulated store) — or the Details sheet would still show
+    prior-FY rows the summary already dropped."""
+    if df is None or not len(df) or df.shape[1] <= 3:
+        return df
+    if fy_start_year is None:
+        fy_start_year = _current_fy_start_year(df)
+    keep = ~df.iloc[:, 3].map(lambda s: _ship_prior_fy(s, fy_start_year))
+    return df[keep].reset_index(drop=True) if not keep.all() else df
+
+
 def last_year_left_behind(profit_df: pd.DataFrame,
                           cn_df: pd.DataFrame | None,
                           dn_df: pd.DataFrame | None,
@@ -1038,20 +1094,21 @@ def last_year_left_behind(profit_df: pd.DataFrame,
     row's own **Account** column and kept ONLY for REPORTED marketplace verticals
     (others dropped). Returns a DataFrame (LAST_YEAR_COLS) sorted by Vertical,
     Type (CN / DN / Logistics). Display-only — never feeds back into any total.
-    Void rows excluded; a row referencing a comma-list of shipments is left behind
-    only if NONE of them are in Details."""
-    det: set = set()
-    if profit_df is not None and not getattr(profit_df, "empty", True) and profit_df.shape[1] > 3:
-        for s in profit_df.iloc[:, 3].astype(str):
-            for p in str(s).split(","):
-                p = p.strip()
-                if p and p.lower() not in ("nan", "none", "nat"):
-                    det.add(p)
+    Void rows excluded.
+
+    A note is 'last year' when EVERY shipment it references belongs to a prior
+    financial year (SH+MM+YY before this April) — matching the manual, whose
+    Details carry no prior-FY rows and whose "Last year's" sheet is exactly those
+    shipments' notes. (This replaced the old 'not in current Details' test, which
+    missed prior-FY shipments that happened to receive a current-FY invoice.)"""
+    _fy_start = _current_fy_start_year(profit_df)
 
     def _is_left(v):
         ships = [p.strip() for p in str(v).split(",")
                  if p.strip() and p.strip().lower() not in ("nan", "none", "nat")]
-        return bool(ships) and not any(p in det for p in ships)   # real shipment(s), none in Details
+        # every referenced shipment must be prior-FY (unparseable ids count as
+        # current, so a note touching any current shipment stays out of last year)
+        return bool(ships) and all(_ship_prior_fy(s, _fy_start) for s in ships)
 
     def _extract(df, typ, date_names, num_names, party_names, status_names, extra_names=None,
                  amount_names=("subtotal", "amount"), dedupe_note=False):
@@ -2840,6 +2897,10 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
         # this sheet is rebuilt from the accumulated store and would otherwise
         # re-introduce rows the summary has already dropped.
         _rep = drop_manual_exclusions(_rep)
+        # Prior-FY shipments belong to the Last Year sheet, not this year's Details
+        # (the manual carries none). Same two-place rule as drop_manual_exclusions;
+        # applied on every path so Details matches the (prior-FY-free) summary.
+        _rep = drop_prior_fy(_rep)
         _main = _rep[~_fu_of(_rep) & ~_oc_of(_rep)]        # keep both out of the main table
         _fu = _live_src[_fu_of(_live_src)]
         if len(_fu) and vertical:

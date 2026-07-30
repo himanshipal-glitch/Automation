@@ -2096,6 +2096,16 @@ elif page == "Summary Report":
                        f"{_before - len(profit_df)} detail row(s) removed from the "
                        f"summary, FY Total and Details sheet.")
 
+        # Prior-FY shipments (SH+MM+YY before this April) belong to last year — drop
+        # them from the current summary/FY/Details; their notes surface on the Last
+        # Year sheet. Matches the manual (0 prior-FY rows in its Details).
+        _pf_before = len(profit_df)
+        profit_df = reports.drop_prior_fy(profit_df)
+        _pf_removed = _pf_before - len(profit_df)
+        if _pf_removed:
+            st.caption(f"📅 {_pf_removed} prior-FY line row(s) routed to the Last Year "
+                       f"sheet (removed from the current summary, FY Total and Details).")
+
         # Last Year Shipments preview removed from the frontend (of no use on-screen).
         # The 'Last Year Shipments' sheet is still built into every downloaded
         # workbook from _cn/_dn/_bill/_atxn via reports.combined_workbook.

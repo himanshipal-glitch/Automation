@@ -12,6 +12,37 @@ vertical against its signed-off manual file before rollout.
 
 ---
 
+## 2026-07-30 · CORRECTION — prior-FY Details exclusion reverted (kept for Last Year only)
+
+The prior-FY change below (`2cc02ba`) removed shipments from Details **by shipment
+id**. That was WRONG: a shipment created before April but INVOICED in the current
+FY is genuine current-year revenue.
+
+Caught by reconciling the Enterprise Details against its manual: the automated
+report was short by exactly one shipment, **`SH032630011`** (Sales 15,054 /
+Purchases 13,366 — the entire FY-total gap). Its id is Mar-2026 (prior-FY) but its
+invoice date is **01-Apr-2026 (current FY)**, and the manual keeps it. A sweep then
+showed **all 14** shipments the id-based rule dropped were invoiced in the current
+FY — so the exclusion was removing real current-year revenue across Enterprise,
+Metal, Plastic and ReWerse.
+
+**Reverted:** `drop_prior_fy` removed from both the summary path (app.py) and
+`combined_workbook` (Details), and the function deleted. **Details/summary are back
+to including every current-FY-invoiced shipment** — no changes to Details, per the
+owner.
+
+**Kept:** the shipment-id prior-FY test (`_ship_prior_fy` / `_current_fy_start_year`)
+still drives the "Last year's" sheet's `_is_left` — that is its correct purpose:
+identifying CNs/DNs that pertain to last financial year's shipments. Verified
+unchanged: End Generator DN 37 notes / 2,435,712.16.
+
+**Correction to an earlier claim:** the Plastic Jun-26 negative was NOT genuinely
+fixed by dropping `SH012631015` — that shipment is invoiced 15-Jun-2026 (current FY)
+and should stay. The negative has a different root cause (its credit-note handling),
+still open.
+
+---
+
 ## 2026-07-30 · Prior-FY shipments routed to the Last Year sheet
 
 Previous-financial-year shipments were appearing in the current Details/summary

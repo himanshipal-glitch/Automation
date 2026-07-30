@@ -1066,21 +1066,11 @@ def _current_fy_start_year(df) -> int:
     return mx.year if mx.month >= 4 else mx.year - 1
 
 
-def drop_prior_fy(df: pd.DataFrame, fy_start_year: int | None = None) -> pd.DataFrame:
-    """Remove prior-FY shipments from the live detail — they belong to the
-    Last Year sheet, not the current Details / summary / FY total, matching the
-    signed-off manual (0 prior-FY rows in its Details).
-
-    Like drop_manual_exclusions, MUST be applied in BOTH the summary path
-    (app.py, to profit_df) AND combined_workbook (to `_rep`, the Details source
-    rebuilt from the accumulated store) — or the Details sheet would still show
-    prior-FY rows the summary already dropped."""
-    if df is None or not len(df) or df.shape[1] <= 3:
-        return df
-    if fy_start_year is None:
-        fy_start_year = _current_fy_start_year(df)
-    keep = ~df.iloc[:, 3].map(lambda s: _ship_prior_fy(s, fy_start_year))
-    return df[keep].reset_index(drop=True) if not keep.all() else df
+# NOTE: prior-FY shipments are DELIBERATELY NOT dropped from the Details/summary.
+# A shipment created before April but INVOICED in the current FY (e.g. Enterprise
+# SH032630011 — Mar-2026 id, invoiced 01-Apr-2026) is genuine current-year revenue
+# and the manual keeps it. The shipment-id prior-FY test below is used ONLY to
+# identify last-year CNs/DNs for the "Last year's" sheet, never to filter Details.
 
 
 def last_year_left_behind(profit_df: pd.DataFrame,
@@ -2897,10 +2887,6 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
         # this sheet is rebuilt from the accumulated store and would otherwise
         # re-introduce rows the summary has already dropped.
         _rep = drop_manual_exclusions(_rep)
-        # Prior-FY shipments belong to the Last Year sheet, not this year's Details
-        # (the manual carries none). Same two-place rule as drop_manual_exclusions;
-        # applied on every path so Details matches the (prior-FY-free) summary.
-        _rep = drop_prior_fy(_rep)
         _main = _rep[~_fu_of(_rep) & ~_oc_of(_rep)]        # keep both out of the main table
         _fu = _live_src[_fu_of(_live_src)]
         if len(_fu) and vertical:

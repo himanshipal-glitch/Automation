@@ -2011,6 +2011,19 @@ elif page == "Summary Report":
         # same list to its Details sheet (it rebuilds from the accumulated store,
         # so it would otherwise put the rows back).
         _exc_store = db.load_manual_exclusions()
+        # Vertical options for the filter/editor — derived from the live data HERE
+        # (the `summaries` dict isn't built until further down), using the same
+        # canonical labels the search compares against, plus any vertical already in
+        # the store so an existing entry's dropdown never blanks.
+        if profit_df is not None and profit_df.shape[1] > 85:
+            _vc = profit_df.iloc[:, 85].astype(str).map(reports._canon_label).astype(str).str.strip()
+            _ex_verts = {v for v in _vc.unique() if v and v.lower() not in ("nan", "none")}
+        else:
+            _ex_verts = set()
+        if not _exc_store.empty and "Vertical" in _exc_store.columns:
+            _ex_verts |= {str(v).strip() for v in _exc_store["Vertical"].dropna()
+                          if str(v).strip()}
+        _ex_verts = sorted(_ex_verts)
         st.markdown("#### 🚫 Manually excluded shipments")
         st.caption("Shipments listed here are removed from their vertical's **Details**, "
                    "and therefore from Sales, Purchases, margins, per-kg figures and the "
@@ -2026,7 +2039,7 @@ elif page == "Summary Report":
                                   placeholder="e.g. 36/MPPET/27/OFF or SH0426")
         with _ex_c2:
             _ex_vfilter = st.multiselect(
-                "Filter the search by vertical", sorted(summaries.keys()),
+                "Filter the search by vertical", _ex_verts,
                 key="excl_vfilter",
                 help="Leave empty to search every vertical.")
 
@@ -2071,7 +2084,7 @@ elif page == "Summary Report":
             key="excl_editor",
             column_config={
                 "Vertical": st.column_config.SelectboxColumn(
-                    "Vertical", options=sorted(summaries.keys()), required=True),
+                    "Vertical", options=_ex_verts, required=True),
                 "Shipment ID": st.column_config.TextColumn("Shipment ID", required=True),
                 "Reason": st.column_config.TextColumn(
                     "Reason", help="Why is this excluded? e.g. 'DRS order — not a Plastic sale'"),

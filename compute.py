@@ -436,6 +436,16 @@ def build_profitability(merged_df: pd.DataFrame,
     # BA  Net Qty (sales) = AV - AZ
     BA  = AV - AZ
 
+    # ITAD weight-based items ('ITAD Plastic waste', 'Mix E-Waste (ITAD)') carry
+    # their quantity in KG, but ITAD is counted in UNITS — so summing them raw
+    # inflates the ITAD quantity by ~1000×. Convert those rows' NET SALES QTY to MT
+    # (÷1000) here, AFTER the sale Amount (AX = AV×AW) is fixed, so ONLY the quantity
+    # total changes — never Sales, Purchases, margins. Exact item-name match only.
+    _KG_ITEMS = {"itad plastic waste", "mix e-waste (itad)"}
+    _kg_q = _s(d, "Item_Name", "").astype(str).str.strip().str.lower().isin(_KG_ITEMS)
+    if _kg_q.any():
+        BA = BA.where(~_kg_q, BA / 1000.0)
+
     # AY  Qty Check
     AY  = (AV == O)
 

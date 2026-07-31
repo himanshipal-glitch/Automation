@@ -149,6 +149,42 @@ untouched; this is styling only.
 
 ---
 
+## 2026-07-31 · ITAD KG-item quantity → MT (fixes inflated ITAD quantity)
+
+ITAD is counted in UNITS, but two item types are entered in KG, so summing them raw
+inflated ITAD quantity ~1000×. Per finance, convert ONLY these exact item names to
+MT (÷1000): **`ITAD Plastic waste`** and **`Mix E-Waste (ITAD)`** (exact match, no
+pattern — several other e-waste spellings exist and must NOT be swept in).
+
+`compute.py`: after `BA = AV − AZ` (Net Qty sales), divide `BA` by 1000 for rows
+whose Item_Name matches. Applied AFTER the sale Amount (`AX = AV×AW`) is fixed, so
+**only the quantity total changes — never Sales/Purchases/margins**.
+
+Verified on the 26-July MIS: ITAD Quantity 51,494 → **12,022**; Sales 9,322,077,
+Purchases 8,301,007, Gross Margin 1,021,070 — **all identical pre/post to the
+rupee**. Side effect: ITAD Revenue/Purchase-per-Kg rise (smaller denominator) — a
+direct consequence of the corrected quantity, not a separate change.
+
+## 2026-07-31 · DECISIONS (no code) — DN ÷1.18 and Re-Commerce payable
+
+**DN valuation in Details stays ÷1.18** (owner's call). `compute.py` keeps its
+blanket ÷1.18 GST strip on every debit note. Consequence: the ~13 marketplace DN
+notes with NO GST account (e.g. AFR `MP/AFR/OFF/0001`, note 36/AFR/27VC00020 —
+manual shows 23,217, engine 19,675) stay slightly understated in Details. This is
+accepted so the GST/tax-factor logic remains **strictly in the Last Year sheet, in
+no other sheet**. Do not port `_ly_tax_factor` into compute.
+
+**Re-Commerce payable is NOT an engine bug.** On the 26-July MIS the engine sums 33
+distinct unpaid vendor invoices tagged `Marketplace (Re-Commerce)` in Zoho =
+₹12,469,060 (~125 L) — no double-counting (33 unique txn#), no missed credits (0
+negatives). The rise (56 L → 125 L) is real new AP (Blue Planet, Bathla, Haier,
+Electrolux, Danish). The manual's negative figure uses a different basis (Black Gold
+net-of-advances ledger). OPEN methodology question: gross AP (engine) vs
+net-of-advances (manual), plus a sign inconsistency (frozen months negative, live
+month positive).
+
+---
+
 ## 2026-07-30 · Manual shipment exclusions (new feature)
 
 A rule-free, user-maintained kill-list for shipments the engine cannot reasonably

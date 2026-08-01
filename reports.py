@@ -3034,18 +3034,23 @@ def combined_workbook(summaries: dict[str, pd.DataFrame],
                             pd.DataFrame([[_t]]).to_excel(w, sheet_name=_shn, startrow=_top,
                                                           startcol=_c0, index=False, header=False)
                             _headers.append((_shn, _top + 1))
-                            # 4-row summary (stored figures, or blank for manual entry)
-                            pd.DataFrame([["", _cfg["prov"], _provcell],
-                                          ["", "Accounted in FY 2026-27", _acct],
-                                          ["", "NO DN value", _nodncell],
-                                          ["", "Closing Provision", _close]],
-                                         columns=["JV Number", "Particulars", "Amount"]) \
-                                .to_excel(w, sheet_name=_shn, startrow=_top + 1, startcol=_c0, index=False)
-                            _headers.append((_shn, _top + 2))
-                            # 'Pertaining to FY' label with the accounted total
-                            pd.DataFrame([[_cfg["pert"], "", _acct]]).to_excel(
-                                w, sheet_name=_shn, startrow=_top + 6, startcol=_c0,
-                                index=False, header=False)
+                            # 4-row provision/JV summary + 'Pertaining to FY' label.
+                            # Cash Discount is EXEMPT (owner: it carries no prior-DN
+                            # provision) — its column shows only the title + detail,
+                            # the JV area left blank. Detail stays at _top+7 so the
+                            # four blocks remain row-aligned.
+                            if _t != "Cash Discount":
+                                pd.DataFrame([["", _cfg["prov"], _provcell],
+                                              ["", "Accounted in FY 2026-27", _acct],
+                                              ["", "NO DN value", _nodncell],
+                                              ["", "Closing Provision", _close]],
+                                             columns=["JV Number", "Particulars", "Amount"]) \
+                                    .to_excel(w, sheet_name=_shn, startrow=_top + 1, startcol=_c0, index=False)
+                                _headers.append((_shn, _top + 2))
+                                # 'Pertaining to FY' label with the accounted total
+                                pd.DataFrame([[_cfg["pert"], "", _acct]]).to_excel(
+                                    w, sheet_name=_shn, startrow=_top + 6, startcol=_c0,
+                                    index=False, header=False)
                             # detail with per-table headers
                             _ds = _top + 7
                             _det = _tb[_cfg["cols"]].copy() if len(_tb) else pd.DataFrame(columns=_cfg["cols"])

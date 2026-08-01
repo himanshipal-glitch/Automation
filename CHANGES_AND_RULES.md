@@ -149,6 +149,42 @@ untouched; this is styling only.
 
 ---
 
+## 2026-08-01 · Last Year sheet — Cash Discount block has NO JV/provision table
+
+Per owner: on the "Last Year Shipments" sheet, the **Cash Discount** block must NOT
+show the little provision/JV summary (Provision as on 31-Mar / Accounted in FY /
+NO DN value / Closing Provision / "Pertaining to FY"). DN, CN and Logistics keep
+theirs. `reports.py` combined_workbook: the 4-row summary + pertaining label are now
+gated on `_t != "Cash Discount"`. The Cash Discount detail still starts at `_top+7`
+so the four columns stay row-aligned; its JV area is just left blank. Calc otherwise
+unchanged.
+
+## 2026-08-01 · OPEN / UNDONE — payables, and a source-data caveat
+
+**Payables (Re-Commerce sign-flip) — UNDONE, needs finance basis + missing source.**
+Confirmed how the engine computes payables: `Payable = Σ balance_fcy` of the AP
+sheet rows tagged `vendor.CF.Vertical Name = <vertical>` — a plain gross total, no
+netting of advances/credits (the AP export has none). Closed months are overwritten
+by the manual "till" file (which can be negative), the open month is the live gross
+AP sum — hence the −30 L (frozen manual) → +124 L (live AP) flip on Re-Commerce.
+NOT an engine miscalculation; the +124 L is 33 real unpaid invoices. But the
+manual's negative payable (−6.97 M) is **not** in the MIS and is **not** the customer
+advances (those total only 610 k) — its true source is unknown (likely a
+vendor-prepayment / Black Gold ledger the MIS doesn't carry). BLOCKED until finance
+says what the payable basis should be and where the negative figure comes from.
+NOTE: this is a SEPARATE issue from the receivables advance — do not conflate them.
+See [[receivables-unused-credit-doublecount]] (that one IS the customer-advance
+story; this payable one is not).
+
+**ITAD unusual margins (e.g. −4538%) — SOURCE DATA, owner handling upstream.**
+Many ITAD shipments show wild margins because the operations team mapped the
+**purchase price incorrectly** in the source (Zoho/MIP). In the manual report the
+owner hand-corrected those shipments. This is a data-quality fix at the source (MIP),
+NOT an engine bug — owner will get it corrected upstream. Engine math is fine given
+the (bad) input.
+
+---
+
 ## 2026-07-31 · ITAD KG-item quantity → MT (fixes inflated ITAD quantity)
 
 ITAD is counted in UNITS, but two item types are entered in KG, so summing them raw

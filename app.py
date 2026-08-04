@@ -744,8 +744,8 @@ if page == "Upload Files":
     # by fuzzy matching below. "NO DN" is handled separately (exclusion list).
     _CANON_ALIASES = {
         "Bill": ["bill", "bills"],
-        "CN":   ["cn", "creditnote", "creditnotes"],
-        "DN":   ["dn", "debitnote", "debitnotes", "vendorcredit", "vendorcredits"],
+        "CN":   ["cn", "cns", "creditnote", "creditnotes"],
+        "DN":   ["dn", "dns", "debitnote", "debitnotes", "vendorcredit", "vendorcredits"],
         "AP":   ["ap", "payable", "payables", "apageing", "apaging"],
         "AR":   ["ar", "receivable", "receivables", "arageing", "araging"],
         "Inv":  ["inv", "invoice", "invoices"],
@@ -764,6 +764,17 @@ if page == "Upload Files":
             return None
         for canon, aliases in _CANON_ALIASES.items():
             if n in aliases:
+                return canon
+        # WORD/substring match — a sheet named "26 July Credit Notes",
+        # "Vendor_Credits_Final" or "Debit Note (Jul)" still resolves (the exact
+        # match above only catches clean names; underscores/spaces are already
+        # stripped by _norm). Order matters: 'vendor credit' and 'debit note' are
+        # DN, 'credit note' is CN — check the DN phrases FIRST so a vendor-credit
+        # sheet isn't caught by the word 'credit' it shares with a credit note.
+        for sub, canon in (("vendorcredit", "DN"), ("debitnote", "DN"),
+                           ("creditnote", "CN"), ("invoice", "Inv"),
+                           ("accounttransaction", "AcctTxn"), ("accounttxn", "AcctTxn")):
+            if sub in n:
                 return canon
         pairs = [(a, c) for c, al in _CANON_ALIASES.items() for a in al]
         m = _difflib.get_close_matches(n, [a for a, _ in pairs], n=1, cutoff=0.82)

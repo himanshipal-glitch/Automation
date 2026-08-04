@@ -149,6 +149,19 @@ untouched; this is styling only.
 
 ---
 
+## 2026-08-01 · Sheet auto-detection: word/substring match for CN/DN names
+
+Zoho exports name the CN/DN sheets inconsistently — "Credit Notes", "Vendor
+Credits", "Debit Note (Jul)", "Vendor_Credits_Final", etc. `_canon_sheet` (app.py)
+now does a WORD/substring pass after the exact-alias match: any sheet name
+containing `vendorcredit` / `debitnote` → DN, `creditnote` → CN, `invoice` → Inv,
+`accounttransaction` → AcctTxn (underscores/spaces already stripped by `_norm`).
+DN phrases are checked BEFORE `creditnote` so "Vendor Credit Notes" → DN (vendor
+credits are debit notes). Also added `dns`/`cns` plural aliases. Verified: "NO DN"
+still → None (exclusion, caught before detection anyway), and junk sheets
+(P&L, Dropdowns) still → None. Column-signature detection (Credit Note Number /
+Vendor Credit Number columns) remains the primary fallback when a name doesn't match.
+
 ## 2026-08-01 · Last Year sheet — Cash Discount block has NO JV/provision table
 
 Per owner: on the "Last Year Shipments" sheet, the **Cash Discount** block must NOT

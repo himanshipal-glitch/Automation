@@ -1233,6 +1233,19 @@ def last_year_left_behind(profit_df: pd.DataFrame,
 
         import receivables as _recv
         d["_note"] = d[numc].astype(str).str.strip()
+        # A vendor credit on a 'Marketplace Logistics' account is a FREIGHT credit,
+        # not a material debit note — it reduces the transporter's bill. Details
+        # already books it in 'Debit note on logistic cost' (see compute.py), so
+        # listing it in this DN block too would contradict that, and no manual
+        # carries one here (checked on all 7 freight credits in the 31-Jul MIS).
+        # Enterprise 27/IB/27VC00001 (SH03262704, SAMRUDDHI ROADWAYS, Rs 3,125) is
+        # the only one that currently reaches this sheet.
+        _freight = (d.assign(_f=d[acc].astype(str)
+                             .str.contains("marketplace logistics", case=False, na=False))
+                     .groupby("_note")["_f"].transform("max"))
+        d = d[~_freight]
+        if d.empty:
+            return pd.DataFrame(columns=LAST_YEAR_COLS)
         d["_vert"] = (d[acc].astype(str).str.extract(r"\((.*?)\)", expand=False)
                       .fillna("").str.strip().str.lower().map(_recv.ACCT_NAME_TO_VERTICAL))
         rows = []

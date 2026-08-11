@@ -893,3 +893,91 @@ CN gap: **−1,06,327 → +4,688**.
   Apr/May/Jun stored values match; Jul-26 needs updating from 168,433 to
   **205,788** (the manual adds a row labelled *"Excess charged in provision than
   actual"*, +37,355).
+
+---
+
+# 2026-08-11 — Freight credits removed from the Last year's DN block
+
+`reports.last_year_left_behind._extract_dn_notes`
+
+## Why
+
+The 10-Aug commit taught **Details** that a vendor credit on a
+`Marketplace Logistics` account is a FREIGHT credit — it goes in
+`Debit note on logistic cost`, not `Actual Debit Note`. The **Last year's** sheet
+is built separately, straight from the Vendor Credit sheet, and was never told.
+So the two sheets contradicted each other: Details treated the note as freight,
+Last year's still listed it as a material debit note.
+
+Spotted while reconciling Enterprise — `SH03262704` showed up as an extra row in
+our DN block:
+
+```
+27/IB/27VC00001   07-Apr-2026   SH03262704   SAMRUDDHI ROADWAYS   Rs 3,125
+Account: Marketplace Logistics (Institutional Business)      <- a transporter
+```
+
+## Rule
+
+A vendor credit raised on a `Marketplace Logistics` account never belongs in the
+Last year's **DN** block. It reduces the transporter's bill, not the material
+cost — the same rule Details already follows.
+
+## Scope — checked, not assumed
+
+There are 7 freight vendor credits in the 31-Jul MIS:
+
+```
+27/IB/27VC00001  27/IB/27VC00018  27/IB/27VC00019  27/IB/27VC00021
+27/IB/27VC00022  36/MET/27VC00107  36/MET/27VC00126
+```
+
+**None of them appears in any manual's Last year's DN block** — verified against
+both the End Generator and Enterprise manuals, all 7 notes. And only ONE of them
+was reaching our sheet at all: `27/IB/27VC00001`, because SH03262704 is a
+Mar-2026 shipment (prior-FY). The other four IB ones sit on current-FY shipments
+and never qualify; `36/MET/27VC00126` likewise.
+
+## Result
+
+| Vertical / block | before | after | manual | gap |
+|---|---:|---:|---:|---:|
+| **IB — DN** | 40,486.53 (15) | **37,361.53 (14)** | 30,861.53 | **+6,500.00** |
+| AFR CN / DN | | unchanged | | |
+| End Generator CN / DN / Logistics | | unchanged | | |
+| Plastic CN / DN | | unchanged | | |
+| ReWerse CN | | unchanged | | |
+| IB CN / Logistics | | unchanged | | |
+
+Freight credits remaining anywhere on the sheet: **0**.
+
+## What is left on Enterprise's DN block, and why
+
+The residual **+6,500** is two notes the MANUAL is missing, not us:
+
+| Note | Shipment | Vendor | Account | raw | ÷1.18 |
+|---|---|---|---|---:|---:|
+| `27/IB/27VC00012` | SH102510050 | YASH ENTERPRISES | MP Purchases (IB) + CGST + SGST | 3,451.50 | **2,925.00** |
+| `27/IB/27VC00013` | SH102511015 | YASH ENTERPRISES | MP Purchases (IB) + CGST + SGST | 4,218.50 | **3,575.00** |
+
+They are indistinguishable from the twelve the manual DOES carry — same vendor,
+same three accounts, same dates (13-May-2026, within the 23-Apr → 05-Jun range of
+the rest), and their associated bills `GST/25-26/203` and `/204` sit between
+`/188` (VC00010, included) and `/206` (VC00020, included).
+
+The clincher: the manual's own CREDIT-note block carries both shipments —
+`27/IB/27CN00015` Rs 3,015 for SH102510050 and `27/IB/27CN00016` Rs 3,685 for
+SH102511015. It has the credit note for each and not the debit note.
+
+**Raised with the manual's owner — looks like two rows missed while compiling.**
+
+## NOT changed (deliberately)
+
+Enterprise's receivable is Rs 1,00,000 below the manual once August is excluded,
+because `36/IB/27DN00001` (R.H.TRADERS, 24-Jul-2026, Rs 1,00,000) is a debit note
+raised ON A CUSTOMER: it sits in the AR sheet as money owed to us, but has no
+Details row, so the invoice-number lookup that builds Enterprise's receivable
+never finds it. There is already a hand-maintained list for exactly this
+(`ENTERPRISE_EXTRA_AR_INVOICES`, 11 entries, one of which is `26/MPPIB/DN0005` —
+another customer DN somebody added by hand). **Owner is checking with finance
+before we change the rule.**

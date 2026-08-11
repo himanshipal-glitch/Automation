@@ -662,3 +662,112 @@ all. A `st.warning` on read failure would have made it obvious immediately.
 only** (10 CN, 10 DN rows), so it cannot populate the Last Year sheet at all.
 Use **`MIS Docs as of 19-07-2026 correct.xlsx`** (CN 367, DN 1,423, spanning
 01-Apr → 18-Jul). Always sanity-check DN row count before reconciling.
+
+
+---
+
+# 2026-08-10 — Logistics fixes (from the End Generator RECONCILE sheet)
+
+Three changes, all from the owner's reconciliation notes on the 31-July End
+Generator report. Nothing else was touched — in particular **the ÷1.18 GST
+handling in Details is unchanged**, per the standing rule that GST logic lives
+only on the Last year's sheet.
+
+## FIX A — a freight debit note belongs in "Debit note on logistic cost"
+`compute.py` · new optional `dn_df` argument
+
+**Note.** `36/MET/27VC00126` · TATA ROAD CARRIER · account
+**`Marketplace Logistics (Metal)`** · raised against freight bill
+`TRC26BLO000238` · ₹8,544.50 · shipment **`SH062625011`**.
+
+**Was.** It fell through to `Actual Debit Note` (a *material* debit note) and was
+then divided by 1.18 → 7,241.10. Freight stayed at 25,100 and cost was ₹1,303.40
+too high.
+
+**Now.** Any vendor credit whose Account contains `Marketplace Logistics` is
+routed to column Z (`Debit note on logistic cost`) as a negative, and removed
+from the DN subtotals so it never reaches Actual DN or the 1.18 division. This is
+routing by Account — the same thing `cleaning.split_bill` already does for bills —
+**not** GST logic.
+
+| | before | after | manual |
+|---|---:|---:|---:|
+| Logistics cost | 25,100.00 | 25,100.00 | 25,100.00 |
+| Debit note on logistic cost | 0.00 | **−8,544.50** | −8,544.50 |
+| Total Logistics Cost | 25,100.00 | **16,555.50** | 16,555.50 |
+| Actual Debit Note | 7,241.10 | **0.00** | 0.00 |
+| Total Cost | 922,832.90 | **921,529.50** | 921,529.50 |
+
+Seven freight credits exist in the 31-Jul MIS; four were sitting in Actual DN —
+`36/MET/27VC00126` (EG) and `27/IB/27VC00019`, `27/IB/27VC00021`,
+`27/IB/27VC00022` (Enterprise).
+
+## FIX B — one freight bill = one charge per shipment
+`compute.py`
+
+**Was.** The logistics merge is on `CF.SO Number`, so a shipment's freight landed
+on **every** Details row of that shipment.
+
+| Vertical | Shipment | Freight bill | rows | charged | should be |
+|---|---|---|---:|---:|---:|
+| End Generator | `SH072616016` | `TRC26BLO000297` | 2 | 44,536 | **22,268** |
+| Enterprise | `SH042614013` | `043689` | 6 | 210,600 | **35,100** |
+| Enterprise | `SH06260101` | `1027` | 2 | 150,580 | **75,290** |
+| Enterprise | `SHMPIB0001` | `02` | 2 | 138,480 | **69,240** |
+| Enterprise | `SH05262701` / `SH05262901` / `SH06260702` / `SH06261101` | — | 2 each | 60,700 each | **30,350 each** |
+
+**Now.** The charge is kept on the row that carries the SALE — where the manual
+puts it (`SH072616016`'s freight sits on the invoiced leg `SFPL/0528`, not on the
+returned leg `SFPL/0519`) — and zeroed on the shipment's other rows. If no row of
+the shipment has a sale, it stays on the first row so nothing is lost.
+Blank-shipment rows are untouched.
+
+## FIX C — Transportation Charges must read Total Logistics Cost
+`reports._summary_block`
+
+**Was.** `tc = w["Logistics_Cost"].sum()` — the raw freight line only, which drops
+the logistics provision. End Generator showed **248,736** against the manual's
+**382,923.50**, a ₹1,65,000 shortfall.
+
+**Now.** `tc = w["Total_Logistics"].sum()` = freight + provision + freight DN.
+
+## Verified — End Generator logistics, all four columns
+
+| Column | engine | manual | gap |
+|---|---:|---:|---:|
+| Logistics cost | 226,468.00 | 226,468.00 | **0.00** |
+| Debit note on logistic cost | −8,544.50 | −8,544.50 | **0.00** |
+| Logistics Provision | 165,000.00 | 165,000.00 | **0.00** |
+| **Total Logistics Cost** | **382,923.50** | **382,923.50** | **0.00** |
+
+Summary row, FY Total:
+
+| Vertical | Transportation | manual | gap |
+|---|---:|---:|---:|
+| End Generator | 382,923 | 382,923.50 | **−0.50** |
+| AFR | 54,711 | 54,711.00 | **0.00** |
+| Plastic / IT AD / Re-Commerce | 0 | 0 | **0.00** |
+
+## Effect on every vertical
+
+| Vertical | Total Logistics before | after | change |
+|---|---:|---:|---:|
+| End Generator | 413,736.00 | 382,923.50 | **−30,812.50** |
+| Enterprise (Institutional Business) | 742,460.00 | 290,965.00 | **−451,495.00** |
+| everything else | — | — | unchanged |
+
+**₹4,82,307.50 of over-counted freight removed.** Actual DN falls correspondingly
+as the freight credits leave it: End Generator 681,173.94 → 673,932.84,
+Enterprise 609,695.30 → 601,165.64.
+
+⚠️ Enterprise has NOT yet been reconciled against its manual. Its ₹4.51 L drop is
+the same two mechanisms proved on End Generator, but it should be checked when
+Enterprise is reconciled.
+
+## Not changed
+
+- The blanket ÷1.18 on material debit notes in Details — deliberately left alone.
+  `MP/AFR/OFF/0001` (`36/AFR/27VC00020`, ₹23,217, no tax line) therefore stays
+  ₹3,541.58 out. GST logic remains confined to the Last year's sheet.
+- The report cutoff date, `CF.Debit note Status`, prior-FY routing, the Amazon
+  overlay, full-reversal bucketing, seller/buyer counts — all still open.

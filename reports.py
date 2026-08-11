@@ -1625,7 +1625,11 @@ def _summary_block(w: pd.DataFrame, recv: float, pay: float, wd: float = 30,
     gm    = sales - pur
     # Transportation Charges = per-shipment logistics + any blank-CFSO transport
     # charge override (AFR "Transport Charges" bills, kept OUT of op cost).
-    tc    = float(w["Logistics_Cost"].sum()) + (tc_override or 0.0)
+    # Transportation Charges = TOTAL Logistics Cost (freight bills + logistics
+    # provision + debit note on freight), not the raw freight line. Reading only
+    # 'Logistics cost' dropped the logistics provision — End Generator showed
+    # 248,736 where the manual has 382,923.50, a 165,000 shortfall.
+    tc    = float(w["Total_Logistics"].sum()) + (tc_override or 0.0)
     oc    = oc_override if oc_override is not None else float(w["Operational_Cost"].sum())
     nm    = gm - tc - oc
 

@@ -647,7 +647,11 @@ def _auto_pipeline():
                 | cleaning.void_dn_shipments(
                     db.read_table("DN", "raw").drop(columns=["_source_file"], errors="ignore")),
                 provision_rates=db.load_provision_rates() or None,
-                bill_purchases_df=bill_pur)
+                bill_purchases_df=bill_pur,
+                # cleaned DN frame carries each note's Account — needed to spot the
+                # 'Marketplace Logistics' (freight) credits, which belong in the
+                # 'Debit note on logistic cost' column, not Actual DN.
+                dn_df=dn)
             db.write_table(merged,  "Merged", "inv_bill_cn_dn")
             db.write_table(profit,  "Merged", "profitability")
             # accumulate line rows permanently — Zoho's export is rolling, so a
@@ -1411,7 +1415,8 @@ elif page == "Merge & Compute":
                 no_dn_shipments=db.load_no_dn_shipments()
                 | cleaning.void_dn_shipments(
                     db.read_table("DN", "raw").drop(columns=["_source_file"], errors="ignore")),
-                provision_rates=db.load_provision_rates() or None
+                provision_rates=db.load_provision_rates() or None,
+                dn_df=dn_df          # Account column → freight credits (see compute)
             )
             # Write to DB (auto-deduplicates col names for SQLite)
             db.write_table(profit_df, "Merged", "profitability")

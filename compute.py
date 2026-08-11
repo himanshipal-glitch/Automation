@@ -190,7 +190,8 @@ def build_profitability(merged_df: pd.DataFrame,
                         logistics_df: pd.DataFrame | None = None,
                         no_dn_shipments: set | None = None,
                         provision_rates: dict | None = None,
-                        bill_purchases_df: pd.DataFrame | None = None) -> pd.DataFrame:
+                        bill_purchases_df: pd.DataFrame | None = None,
+                        dn_df: pd.DataFrame | None = None) -> pd.DataFrame:
 
     d = merged_df.copy()
 
@@ -293,7 +294,58 @@ def build_profitability(merged_df: pd.DataFrame,
         }), on="CFSO_Number", how="left")
 
     Y   = _s(d, "_log_Y")               # Logistics cost
-    Z   = pd.Series(0.0, index=d.index) # Debit note on logistic cost (not in data)
+
+    # ── One freight bill = ONE charge per shipment ────────────────────────────
+    # The merge above is on CF.SO Number, so the shipment's freight lands on EVERY
+    # Details row of that shipment. A shipment split across several material lines
+    # (or two bill legs) was therefore charged the same freight two-to-six times:
+    #   End Generator  SH072616016  bill TRC26BLO000297  22,268 charged twice
+    #   Enterprise     SH042614013  bill 043689          35,100 charged six times
+    # Total over-charge on the 31-Jul MIS: 463,698 (Enterprise 441,430 + EG 22,268).
+    # Keep the charge on the row that carries the SALE (that's where the manual puts
+    # it — SH072616016's freight sits on the invoiced leg SFPL/0528, not on the
+    # returned leg); if no row of the shipment has a sale, keep it on the first.
+    _lg_ship = _s(d, "CFSO_Number", "").astype(str).str.strip()
+    _lg_named = _lg_ship != ""
+    if _lg_named.any() and (Y.fillna(0) != 0).any():
+        _has_sale = (AX.fillna(0) != 0)
+        # rank rows within each shipment: sale-carrying rows first, original order kept
+        _ord = pd.DataFrame({"s": _lg_ship, "k": (~_has_sale).astype(int)}).assign(
+            _i=range(len(d))).sort_values(["s", "k", "_i"])
+        _keep = pd.Series(False, index=d.index)
+        _keep.iloc[_ord.groupby("s", sort=False)["_i"].first().to_numpy()] = True
+        Y = Y.where(~_lg_named | _keep, 0.0)
+
+    # Z = Debit note on logistic cost. A vendor credit raised on a
+    # 'Marketplace Logistics' account is a FREIGHT credit — it reduces the freight
+    # bill, it is not a material debit note. Previously it fell through to Actual DN
+    # (and was then divided by 1.18), so the freight stayed too high and the cost too
+    # low: End Generator SH062625011, note 36/MET/27VC00126 (TATA ROAD CARRIER,
+    # against freight bill TRC26BLO000238) — 8,544.50 belongs here, the manual shows
+    # 'Debit note on logistic cost' = -8,544.50 and Total Logistics 16,555.50.
+    Z   = pd.Series(0.0, index=d.index)
+    _freight_notes: set = set()
+    if dn_df is not None and not getattr(dn_df, "empty", True):
+        _dacc = next((c for c in dn_df.columns
+                      if "".join(ch for ch in str(c).lower() if ch.isalnum()) == "account"), None)
+        _dno = next((c for c in dn_df.columns
+                     if "".join(ch for ch in str(c).lower() if ch.isalnum())
+                     in ("vendorcreditnumber", "debitnotenumber")), None)
+        if _dacc is not None and _dno is not None:
+            _fr = dn_df[_dacc].astype(str).str.contains("marketplace logistics",
+                                                        case=False, na=False)
+            _freight_notes = set(dn_df.loc[_fr, _dno].astype(str).str.strip()) - {"", "nan"}
+    if _freight_notes:
+        _n1 = _s(d, "DN_1_Vendor_Credit_Number", "").astype(str).str.strip()
+        _n2 = _s(d, "DN_2_Vendor_Credit_Number", "").astype(str).str.strip()
+        _m1, _m2 = _n1.isin(_freight_notes), _n2.isin(_freight_notes)
+        # freight credits reduce freight (negative), and are moved OUT of the DN
+        # subtotals so they never reach Actual DN / the 1.18 division below
+        Z = -(dn1_sub.where(_m1, 0.0) + dn2_sub.where(_m2, 0.0))
+        dn1_sub = dn1_sub.where(~_m1, 0.0)
+        dn2_sub = dn2_sub.where(~_m2, 0.0)
+        BZ = (dn1_sub + dn2_sub) / _GST     # recompute Actual DN without them
+
     AA  = _s(d, "CFEstimated_Logistics_Cost")  # Logistics Provision (estimate)
     # The provision is only an ESTIMATE of the transport cost. Drop it whenever the
     # SHIPMENT has any ACTUAL logistics bill — decided at SHIPMENT level, not line

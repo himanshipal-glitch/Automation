@@ -771,3 +771,125 @@ Enterprise is reconciled.
   ₹3,541.58 out. GST logic remains confined to the Last year's sheet.
 - The report cutoff date, `CF.Debit note Status`, prior-FY routing, the Amazon
   overlay, full-reversal bucketing, seller/buyer counts — all still open.
+
+---
+
+# 2026-08-10 — Enterprise: Pune (MPPUNE) notes reach the Last year's sheet
+
+`reports.last_year_left_behind` · new `_PRIOR_FY_ORDER_PREFIXES`
+
+## Problem
+
+Enterprise's Last year's **credit-note block was ₹1,06,327 short** — 31 of the
+manual's 46 notes were missing, and they weren't anywhere else in the report
+either.
+
+| Block | engine | manual | gap |
+|---|---:|---:|---:|
+| CN | 43,225.00 (15 notes) | 1,49,552.00 (46) | **−1,06,327.00** |
+
+## Cause
+
+All the missing notes reference a **Pune order**, not a shipment id:
+
+```
+27/IB/27CN00018   Reference# = MPPUNE/0073   SAARLOHA ADVANCED MATERIALS    8,412
+27/IB/27CN00034   Reference# = MPPUNE/0078   SOUND CASTINGS                14,001
+27/IB/27CN00052   Reference# = MPPUNE/0161   SOUND CASTINGS                 6,300
+   ... 32 notes in total, Rs 1,11,014.50
+```
+
+The last-year test asks *"is every referenced shipment prior-FY?"* via a regex
+expecting `SH` + MM + YY. `MPPUNE/0073` doesn't match, so it was treated as
+CURRENT year and the note was dropped. And because no such shipment exists in
+Details either, the notes vanished from the report completely.
+
+They genuinely are prior-year notes:
+
+- the manual's block is headed **"Credit note Pertaining to FY 25-26"**
+- Pune is kept on the manual's own **'Pune MIS'** sheet (448 rows), every row of
+  which reads `Financial Year = FY 2025-26`, months Apr-25 onward, with
+  `CF.SO Number` values like `MHPV001` and `MPPUNE/0183`
+
+## Rule
+
+> A reference we cannot parse as an `SH` shipment id is NOT automatically
+> current-year. An order reference belonging to a business kept on its own
+> prior-FY book — Pune, `MPPUNE/…` — is a last-year reference, provided this
+> MIS's Details has never seen it.
+
+Held in one named constant so another branch can be added later:
+
+```python
+_PRIOR_FY_ORDER_PREFIXES: tuple[str, ...] = ("MPPUNE",)
+```
+
+## Deliberately NOT generalised
+
+The obvious wider rule — *"unparseable AND not in Details"* — was tested and
+rejected. It adds far more than the manuals carry:
+
+| Vertical | Type | rows | value | wanted? |
+|---|---|---:|---:|---|
+| IB | CN | 32 | 1,11,014.50 | YES |
+| IB | Logistics | 3 | 3,00,340.00 | no — `MHPV333/334/339` vehicle refs |
+| Plastic | CN | 3 | 7,78,142.28 | no |
+| Plastic | DN | 2 | 47,420.00 | no |
+| Plastic | Logistics | 4 | 42,000.00 | no |
+| Re-Commerce | DN | 5 | 4,73,944.20 | no — Re-Commerce is out of scope |
+
+**Add a prefix to that constant only with a manual to prove it against.**
+
+## Verified
+
+Prefix list OFF vs ON, whole Last year's sheet:
+
+```
+AFR            CN / DN            unchanged
+End Generator  CN / DN / Logistics unchanged
+Plastic        CN / DN            unchanged
+ReWerse        CN                 unchanged
+IB             DN / Logistics     unchanged
+IB             CN     15 -> 47 notes    43,225.00 -> 154,239.50   <<< the only change
+```
+
+**One vertical/type changed, nothing removed.** Summary tabs untouched — the Last
+year's sheet is display-only and never feeds a total.
+
+| Enterprise block | before | after | manual | gap |
+|---|---:|---:|---:|---:|
+| **CN** | 43,225.00 | **1,54,239.50** | 1,49,552.00 | **+4,687.50** |
+| DN | 40,486.53 | 40,486.53 | 30,861.53 | +9,625.00 |
+| Logistics | 38,550.00 | 38,550.00 | 43,229.00 | −4,679.00 |
+
+CN gap: **−1,06,327 → +4,688**.
+
+## Known residuals (manual-side choices, left alone)
+
+- **`SH03262704`** — we carry its CN (4,687.50), DN (3,125) and Logistics
+  (30,000); the manual carries none of the three. A Mar-2026 shipment, prior-FY
+  by every test, simply not listed on Enterprise's Last year's sheet.
+- `27/IB/27VC00012` (2,925) and `VC00013` (3,575) — the manual has these
+  shipments' CREDIT notes (`CN00015`, `CN00016`) but not their DEBIT notes.
+- Logistics: the manual lists `GST/25-26/005` (YASH ENTERPRISES, 15-Apr-**2025**,
+  43,229) which we don't reach — that block is headed *"FY 24-25 Logistic Bills
+  accounted FY 25-26"*, a year further back than we look.
+
+## Enterprise reconciliation summary (31-Jul MIS)
+
+- **Details: 0 of 230 shipments differ** on any field.
+- Sales / Purchases / Gross Margin **exact for all four months**; Total Cost,
+  Amount, Net Revenue, Margin and Inv Qty all tie to the rupee.
+- Sellers and buyers match every month.
+- The freight fixes have **no effect** on the Enterprise tab — its B2B rows carry
+  no freight at all (that sits in Processing Center).
+- Open: 3 August shipments (`SH08260303`, `SH08260305`, +1) need the report
+  cutoff; Receivable is exactly **Rs 1,00,000** below the manual once August is
+  excluded (looks like a manual adjustment — ask finance); the manual counts its
+  own `Service Charges (…)` placeholder rows as transactions and as a supplier
+  (BLACK GOLD), which is why its Jun/Jul transaction and FY seller/buyer counts
+  run one higher than ours.
+- **Operational Cost is NOT an engine issue** — it is already a manual input.
+  Apr/May/Jun stored values match; Jul-26 needs updating from 168,433 to
+  **205,788** (the manual adds a row labelled *"Excess charged in provision than
+  actual"*, +37,355).

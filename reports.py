@@ -1066,6 +1066,24 @@ def _current_fy_start_year(df) -> int:
     return mx.year if mx.month >= 4 else mx.year - 1
 
 
+# Order-reference prefixes that are NOT Zoho shipment ids but belong to a business
+# kept on its own PRIOR-FY book — their credit/debit notes are last-year notes.
+#
+# Pune (MPPUNE/…): the manual tracks it on its own 'Pune MIS' sheet, every row of
+# which reads Financial Year = FY 2025-26 (Apr-25 onwards), and those orders never
+# appear in Details. Its notes sit on the manual's Last year's sheet under the
+# heading "Credit note Pertaining to FY 25-26". Because MPPUNE/0073 doesn't match
+# the SH+MM+YY pattern, `_ship_prior_fy` used to call it CURRENT year, so all 32
+# Enterprise notes (Rs 1,11,014.50) were dropped from Last year's — and with no
+# such shipment in Details either, they vanished from the report entirely.
+#
+# Deliberately NOT a general "unparseable and not in Details" rule: that also pulls
+# in MHPV vehicle refs (IB Logistics Rs 3,00,340), Plastic CN/DN/Logistics and five
+# Re-Commerce DNs, none of which the manuals carry. Add a prefix here only with a
+# manual to prove it against.
+_PRIOR_FY_ORDER_PREFIXES: tuple[str, ...] = ("MPPUNE",)
+
+
 # NOTE: prior-FY shipments are DELIBERATELY NOT dropped from the Details/summary.
 # A shipment created before April but INVOICED in the current FY (e.g. Enterprise
 # SH032630011 — Mar-2026 id, invoiced 01-Apr-2026) is genuine current-year revenue
@@ -1092,13 +1110,23 @@ def last_year_left_behind(profit_df: pd.DataFrame,
     shipments' notes. (This replaced the old 'not in current Details' test, which
     missed prior-FY shipments that happened to receive a current-FY invoice.)"""
     _fy_start = _current_fy_start_year(profit_df)
+    _det_ships = (set(profit_df.iloc[:, 3].astype(str).str.strip())
+                  if profit_df is not None and getattr(profit_df, "shape", (0, 0))[1] > 3 else set())
+
+    def _prior_ref(s: str) -> bool:
+        """Is this reference a PRIOR-FY one? An SH id is decided by its own
+        month/year. A reference that is not an SH id at all is decided by
+        `_PRIOR_FY_ORDER_PREFIXES` — see the note on that constant."""
+        if _ship_month_year(s) is not None:
+            return _ship_prior_fy(s, _fy_start)
+        return s.upper().startswith(_PRIOR_FY_ORDER_PREFIXES) and s not in _det_ships
 
     def _is_left(v):
         ships = [p.strip() for p in str(v).split(",")
                  if p.strip() and p.strip().lower() not in ("nan", "none", "nat")]
-        # every referenced shipment must be prior-FY (unparseable ids count as
-        # current, so a note touching any current shipment stays out of last year)
-        return bool(ships) and all(_ship_prior_fy(s, _fy_start) for s in ships)
+        # every referenced shipment must be prior-FY (an unrecognised reference
+        # counts as current, so a note touching any current shipment stays out)
+        return bool(ships) and all(_prior_ref(s) for s in ships)
 
     def _extract(df, typ, date_names, num_names, party_names, status_names, extra_names=None,
                  amount_names=("subtotal", "amount"), dedupe_note=False):

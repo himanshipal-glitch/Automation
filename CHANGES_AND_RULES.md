@@ -981,3 +981,168 @@ never finds it. There is already a hand-maintained list for exactly this
 (`ENTERPRISE_EXTRA_AR_INVOICES`, 11 entries, one of which is `26/MPPIB/DN0005` —
 another customer DN somebody added by hand). **Owner is checking with finance
 before we change the rule.**
+
+---
+
+# 2026-08-14 — The NO DN sheet now always refreshes the stored list
+
+`app.py._is_no_dn_sheet`, `app.py._process_excel`, `database.save_no_dn_shipments`
+
+## Rule (unchanged, now enforced)
+
+The most recently uploaded NO DN sheet REPLACES the stored list, and stays in
+force until another NO DN sheet is uploaded. It is not merged.
+
+## Why
+
+Reconciling AFR against the 31-Jul manual, seven shipments were taking a CN/DN
+provision the manual did not:
+
+```
+SH06261301, SH06262202   AFR              manual Remarks "No DN"
+SH04261004               Plastic          "DN Issued & CN not passing"
+SH072616016, SH072628013, SH072630015   End Generator   "No Debit Note"
+SH06260908               End Generator    "Divertion"
+```
+
+None of the seven is on the stored NO DN list (9,349 shipments, last written
+28-Jul-2026). The 31-Jul MIS pack contains six files — Bill, Invoice,
+Credit_Note, Vendor_Credits, AR, AP — and **no NO DN sheet at all**, so the
+store was never refreshed. Worth ~Rs 9,457 on AFR and Rs 22,467 on Plastic.
+
+That is a process gap, not a code bug. But chasing it surfaced four ways the
+refresh could fail SILENTLY, which are what changed here.
+
+## What changed
+
+1. **Sheet detection inside a workbook was far narrower than for a standalone
+   file.** In-workbook, a tab qualified only if its name normalised to exactly
+   `nodn`, or it carried a `DebitNotefromBuyer` column. A standalone file got a
+   full keyword list. So a tab named `NO DN List`, `No_DN_Shipments`, `CF DN No`
+   or `DN Status` inside the combined MIS export was skipped with no error and
+   the store silently stayed on the previous upload. Both paths now share one
+   vocabulary: `nodn`, `cfdn`, `dnno`, `dnstatus`, `nondn`, matched as
+   substrings. A sheet that resolves to a core dataset (Bill/CN/DN/AP/AR/Inv) is
+   never treated as the exclusion list.
+
+2. **An empty or unusable sheet was a silent no-op** — `save_no_dn_shipments`
+   returned early and the UI still showed a green tick. It now returns
+   `(rows_stored, note)` and the upload table shows the reason. The previous
+   list is left intact in that case, so a blank or mis-parsed sheet can never
+   wipe the store.
+
+3. **The shipment-ID column fallback was blind** — anything unrecognised fell
+   straight to `df.columns[0]`. It now tries the known names, then any column
+   mentioning a shipment/SO id, and only then falls back to column 0 — saying so
+   in the note when it does.
+
+4. **No visibility.** The upload row now reads `No-DN exclusion (9,349 -> 9,412)`
+   and the sidebar shows when the list was last replaced, so a stale list is
+   obvious instead of invisible.
+
+## Verified
+
+Detection: 11 cases pass — the four previously-missed name variants now match,
+and `Bills` / `DebitNotes` / `CreditNotes` / `Invoice` / `DropdownData` are
+never swallowed. Save: replace-not-merge confirmed; empty sheet, all-blank ids,
+odd column name and the DebitNotefromBuyer filter all behave. The real 9,349-row
+store was backed up, exercised and restored identical. Full engine re-run after
+the change gives byte-identical FY totals on all six verticals.
+
+## NOT changed (deliberately)
+
+`CF.Debit note Status` on the Invoice sheet is NOT read and NOT used. The NO DN
+sheet remains the only source of the no-provision list.
+
+---
+
+# 2026-08-14 — Enterprise never takes a CN/DN; IT AD loses its per-Kg rows
+
+## 1. Enterprise: credit / debit notes are never taken
+
+`compute.ENTERPRISE_NO_NOTES` + the block just above `AK = BZ` in
+`compute.build_profitability`
+
+### Rule
+
+An Institutional Business B2B deal does not carry credit or debit notes. If a
+note appears in the MIS against an Enterprise shipment it is mis-tagged (it
+belongs to another vertical), so it is NOT taken into the report — actual notes
+AND provisions, on both the sales and the purchase side.
+
+**Enterprise ONLY.** Scoped to the same definition `reports._ib_split_masks`
+uses for the Enterprise tab: an Institutional Business row whose shipment id
+starts `SH`, is not an internal `MPIB` transfer, and has a real purchase behind
+it. Processing Center keeps its notes; every other vertical is untouched.
+
+### Where it is applied, and why there
+
+The six series (Full/Actual/Provision on each side) are zeroed BEFORE `AK`/`BL`
+are derived and before Total Cost (`AM`) and Net Revenue (`BN`) are built, so
+every dependent column — Total Cost, Net Revenue, Total CN/DN (Inc. Prov), the
+Check columns, Margin, the GST columns and the Remarks text — follows
+automatically. Patching the output frame afterwards would have meant
+re-deriving those by hand, with the sign traps that live in that layout
+(`AM = Q + AB + AJ + T + AE − AK − AL`, `BN = AX + BK + BB + BF − BL − BM`).
+
+### Evidence it matches the manual
+
+The Enterprise manual's Details sheet has ZERO shipment rows carrying a CN or
+DN. Two rows do hold an `Actual Credit Note` value (−7,777,762.38 and
+5,718,754.55) but every other field on them is blank — they are the column's
+footer totals, not shipments.
+
+### Blast radius — measured, rule OFF vs ON in one process
+
+```
+Enterprise (B2B), 327 rows : all six note columns 0.00        OK
+Processing Centre, 13 rows : Actual DN 601,165.64 unchanged   OK
+                             Actual CN 723,852.50 unchanged   OK
+FY Sales / Purchases / GM / CN / DN : no vertical moves
+Enterprise Details vs manual : 230 shipments, 0 differ
+```
+
+**A NO-OP on this MIS** — Enterprise B2B already carried no notes. It is a
+guard for future data, not a correction. `ENTERPRISE_NO_NOTES = False` turns it
+off.
+
+## 2. IT AD: 'Revenue Per Kg' and 'Purchase Cost Per Kg' removed
+
+`reports.HIDDEN_SUMMARY_ROWS` / `reports.drop_hidden_summary_rows`, called from
+`app.py` right after `insert_transport_row`.
+
+IT AD counts DEVICES, not weight, so its Quantity row is a unit count and a
+"per Kg" figure reads as rupees-per-device — meaningless, and the manual does
+not carry it either.
+
+DISPLAY-ONLY: nothing is recomputed. It runs LAST, after `apply_frozen`,
+`_recompute_fy`, the Enterprise op-cost override and `insert_transport_row` —
+all of which index the fixed summary layout by POSITION. Dropping a row any
+earlier would shift those indices and silently corrupt frozen months.
+
+```
+IT AD          30 -> 28 rows
+AFR / End Generator / Plastic / Enterprise / Re-Commerce : 30 -> 30, untouched
+idempotent : yes
+```
+
+NOTE: `Transportation Charges Per Kg` is still on IT AD — only the two rows
+named were asked for. Say the word if it should go too.
+
+## Found while verifying — NOT fixed (nobody asked)
+
+**Re-Commerce Purchases is not reproducible.** Three identical runs of the same
+MIS gave 61,353,713 / 61,350,001 / 61,358,750 — a spread of about Rs 8,749.
+Pinning `PYTHONHASHSEED=0` gives 61,356,326 every time, which identifies the
+cause as set-iteration order.
+
+`cleaning.py` line 535: `amz_bills = amazon_map.get(inv_no, set())`, then
+`lines = [ln for b in amz_bills for ln in amz_idx.get((b, nm), [])]`.
+`amazon_map`'s values are `set` objects (`defaultdict(set)`, line 262). Python
+randomises string hashing per process, so when one Recykal invoice maps to
+several Amazon bills the lines come out in a different order each run, and
+`_take_lines(lines, q)` — which consumes lines until quantity `q` is met —
+takes different lines at different prices.
+
+One-word fix (`sorted(amz_bills)`), NOT applied. Sales and every other vertical
+are stable; only Re-Commerce Purchases moves.

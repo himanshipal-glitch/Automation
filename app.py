@@ -786,10 +786,22 @@ if page == "Upload Files":
             return next(c for a, c in pairs if a == m[0])
         return None
 
+    # Sheet-name spellings that mean "this is the no-provision exclusion list".
+    # Matched as SUBSTRINGS of the normalised name, so 'NO DN', 'NO DN List',
+    # 'CF DN No', 'DN Status' all land. Same vocabulary the standalone-file path
+    # uses — the two were out of step, so a tab named anything but exactly
+    # 'NO DN' was skipped inside the combined MIS export and the store silently
+    # stayed on the previous upload.
+    NO_DN_SHEET_KEYS = ("nodn", "cfdn", "dnno", "dnstatus", "nondn")
+
     def _is_no_dn_sheet(df: pd.DataFrame, sheetname: str) -> bool:
-        """The exclusion list: a 'NO DN' sheet or any sheet with a
-        DebitNotefromBuyer flag column."""
-        if _norm(sheetname) == "nodn":
+        """The exclusion list: a 'NO DN'-style sheet name, or any sheet with a
+        DebitNotefromBuyer flag column. A sheet that resolves to a core dataset
+        (Bill/CN/DN/AP/AR/Inv) is never treated as the exclusion list."""
+        n = _norm(sheetname)
+        if n != "nodn" and _canon_sheet(sheetname):
+            return False
+        if any(k in n for k in NO_DN_SHEET_KEYS):
             return True
         cols = {_norm(c) for c in df.columns}
         return any("debitnote" in c and "buyer" in c for c in cols)
@@ -912,9 +924,11 @@ if page == "Upload Files":
             if not has_core and (has_dnbuyer or any(k in low for k in
                     ["no dn", "no_dn", "cf.dn", "cf dn", "dn no", "dn status", "non dn", "exclude"])):
                 ex = pd.read_excel(io.BytesIO(file_bytes), sheet_name=xl.sheet_names[0]).dropna(how="all")
-                n = db.save_no_dn_shipments(ex)
-                results.append({"File": filename, "Sheet": xl.sheet_names[0], "Dataset": "No-DN exclusion (saved)",
-                                "Rows": n, "Status": "✅"})
+                _was = db.no_dn_count()
+                n, _why = db.save_no_dn_shipments(ex)
+                results.append({"File": filename, "Sheet": xl.sheet_names[0],
+                                "Dataset": f"No-DN exclusion ({_was:,} → {n:,})", "Rows": n,
+                                "Status": "✅ replaced" if not _why else f"⚠ {_why}"})
                 return
             # Re-Commerce MANUAL DETAIL file (accurate costs, Profitability-sheet
             # format) — stored in the DB and used AS-IS for Re-Commerce's FY.
@@ -950,9 +964,11 @@ if page == "Upload Files":
                 df = _fix_title_header(file_bytes, sheet, df)
                 # NO-DN sheet → REPLACE the permanent exclusion list, then skip it
                 if _is_no_dn_sheet(df, sheet):
-                    n = db.save_no_dn_shipments(df.dropna(how="all"))
+                    _was = db.no_dn_count()
+                    n, _why = db.save_no_dn_shipments(df.dropna(how="all"))
                     results.append({"File": filename, "Sheet": sheet,
-                                    "Dataset": "No-DN exclusion (replaced)", "Rows": n, "Status": "✅"})
+                                    "Dataset": f"No-DN exclusion ({_was:,} → {n:,})", "Rows": n,
+                                    "Status": "✅ replaced" if not _why else f"⚠ {_why}"})
                     continue
                 dataset = _detect_dataset(df, filename, sheet)
                 if dataset not in ALLOWED_INGEST:
@@ -1036,8 +1052,11 @@ if page == "Upload Files":
             st.rerun()
 
     _nodn_count = db.no_dn_count()
+    _nodn_when = db.no_dn_last_updated()
     with st.expander(f"🚫 'CF.DN = No' shipment exclusion list — {_nodn_count:,} shipments"
-                     + ("" if _nodn_count else " (empty)"), expanded=False):
+                     + ("" if _nodn_count else " (empty)")
+                     + (f" · last replaced {_nodn_when:%d-%b-%Y %H:%M}" if _nodn_when else ""),
+                     expanded=False):
         st.caption(
             "Shipments listed here (CF.DN = No/false) are **excluded** from the ReWerse "
             "2.5% CN/DN provision. Provision applies to ReWerse shipments NOT in this list. "
@@ -2209,6 +2228,9 @@ elif page == "Summary Report":
         # op-cost override, so the 29-row freeze layout is never disturbed. One place
         # → feeds the on-screen tables, the workbook, email and Recy alike.
         summaries = {k: reports.insert_transport_row(v) for k, v in summaries.items()}
+        # Per-vertical hidden rows (IT AD's per-Kg rows — it counts devices).
+        # LAST step: everything above indexes the fixed layout by position.
+        summaries = reports.drop_hidden_summary_rows(summaries)
         st.session_state["_recy_summaries"] = summaries
 
         # Cached workbook builder — reuse bytes across reruns when nothing that

@@ -171,34 +171,59 @@ def clear_recommerce_manual(with_samsung: bool | None = None) -> None:
 NO_DN_PATH = PERSIST_DIR / "no_dn_shipments.parquet"
 
 
-def save_no_dn_shipments(df: pd.DataFrame) -> int:
+NO_DN_ID_COLS = ("shipment_id", "cfso_number", "shipment", "cf_so_number",
+                 "so_number", "shipmentid", "cf_shipment_id")
+
+
+def save_no_dn_shipments(df: pd.DataFrame) -> tuple[int, str]:
     """
-    Persist the list of shipment IDs that have CF.DN = No/false. The provision
-    is applied only to shipments NOT in this list. Stores the shipment-id column.
+    REPLACE the stored list of shipment IDs that have CF.DN = No/false. The
+    provision is applied only to shipments NOT in this list.
+
+    The most recently uploaded NO DN sheet is the one in force, and stays in use
+    until another one is uploaded. Returns (rows_now_stored, note): note is ""
+    on a clean replace, otherwise it says what was odd. When the sheet can't be
+    used at all the PREVIOUS list is left untouched and its count is returned —
+    so a blank or mis-parsed sheet can never silently wipe the store.
     """
+    before = no_dn_count()
     if df is None or df.empty:
-        return no_dn_count()
+        return before, "sheet had no rows — kept the previous list"
     df = df.copy()
     df.columns = [_safe_col(c) for c in df.columns]
     # if a DebitNotefromBuyer-style flag exists, keep only the NO/false rows
     flag = next((c for c in df.columns if "debitnote" in c.lower() and "buyer" in c.lower()), None)
     if flag:
         df = df[df[flag].astype(str).str.strip().str.lower().isin(["no", "false", "n", "0"])]
-    # pick the shipment-id column (case-insensitive)
-    col = None
-    for c in df.columns:
-        if c.lower() in ("shipment_id", "cfso_number", "shipment", "cf_so_number", "so_number", "shipmentid"):
-            col = c; break
-    if col is None:                       # fall back to first column
+    # pick the shipment-id column (case-insensitive), then loosen, then fall back
+    note = ""
+    col = next((c for c in df.columns if c.lower() in NO_DN_ID_COLS), None)
+    if col is None:
+        col = next((c for c in df.columns
+                    if "shipment" in c.lower()
+                    or "sonumber" in c.lower().replace("_", "")), None)
+    if col is None:                       # last resort — first column (legacy)
         col = df.columns[0]
+        note = f"no Shipment ID column recognised — read IDs from '{col}'"
     ships = (df[col].astype(str).str.strip())
-    ships = ships[(ships != "") & (ships.str.lower() != "nan")].unique()
+    ships = ships[(ships != "") & (~ships.str.lower().isin(["nan", "none", "nat"]))].unique()
+    if len(ships) == 0:
+        return before, f"no shipment IDs found in '{col}' — kept the previous list"
     out = pd.DataFrame({"Shipment_ID": ships})
     try:
         out.to_parquet(NO_DN_PATH, index=False)
     except Exception:
         out.to_pickle(NO_DN_PATH.with_suffix(".pkl"))
-    return len(out)
+    return len(out), note
+
+
+def no_dn_last_updated():
+    """When the stored NO DN list was last replaced (None if never)."""
+    import datetime as _dt
+    for p in (NO_DN_PATH, NO_DN_PATH.with_suffix(".pkl")):
+        if p.exists():
+            return _dt.datetime.fromtimestamp(p.stat().st_mtime)
+    return None
 
 
 def load_no_dn_shipments() -> set:

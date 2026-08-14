@@ -128,6 +128,14 @@ MANUALLY_EXCLUDED_SHIPMENTS: set = set()
 FAKE_DN_SHIPMENTS: set = {"SH032616011"}
 FAKE_DN_CATEGORY = "Fake DN (Excluded)"
 
+# Enterprise (Institutional Business B2B) deals do not carry credit/debit notes.
+# When True, any CN/DN sitting against an Enterprise shipment in the MIS is
+# treated as mis-tagged and is NOT taken into the report — actual notes and
+# provisions alike, on both the sales and purchase side. Enterprise ONLY:
+# Processing Center and every other vertical are unaffected. See the block that
+# applies it, just above `AK = BZ`.
+ENTERPRISE_NO_NOTES: bool = True
+
 # ── CN/DN provision rates ─────────────────────────────────────────────────────
 # Default provision rate per Broad Category, as a FRACTION (0.0455 = 4.55%).
 # Applied to Sale Amount (Provision for CN) and Purchase Price (Provision for DN).
@@ -471,6 +479,41 @@ def build_profitability(merged_df: pd.DataFrame,
 
     # AD  Cost/Kg = IFERROR((Q+AB)/S, 0) — 0 if Net Qty <= 0
     AD  = _safe_div(Q + AB, S, positive_only=True)
+
+    # ── Enterprise: credit / debit notes are NEVER taken ──────────────────────
+    # Institutional Business B2B deals do not carry CN/DN. If a note appears in
+    # the MIS against an Enterprise shipment it is mis-tagged (it belongs to
+    # another vertical), so it is not taken into the report — no actual note and
+    # no provision, on either the sales or the purchase side.
+    #
+    # Enterprise ONLY. Scoped to the same definition reports._ib_split_masks
+    # uses for the Enterprise tab: an Institutional Business row whose shipment
+    # id starts 'SH', is not an internal 'MPIB' transfer, and has a real
+    # purchase behind it. Processing Center keeps its notes; every other
+    # vertical is untouched.
+    #
+    # Zeroed HERE, before AK/BL are derived and before Total Cost (AM) and Net
+    # Revenue (BN) are built, so every dependent column — AM, BN, Total
+    # CN/DN(Inc.Prov), Check, Margin, the GST columns and the Remarks text —
+    # follows automatically instead of being patched afterwards.
+    _cat_ib = (_s(d, "Account_inv", "").astype(str)
+               .str.extract(r"\((.+?)\)", expand=False).fillna("")
+               .str.strip().str.lower() == "institutional business")
+    if ENTERPRISE_NO_NOTES and _cat_ib.any():
+        _sh_u = _s(d, "CFSO_Number", "").astype(str).str.strip().str.upper()
+        _has_pur = ((~_s(d, "Bill_Number", "").astype(str).str.strip()
+                     .isin(["", "nan", "None", "NaT"])) | (Q != 0))
+        _has_pur = _has_pur.groupby(_sh_u).transform("max").astype(bool)
+        _ent = (_cat_ib & _sh_u.str.startswith("SH")
+                & ~_sh_u.str.contains("MPIB", na=False) & _has_pur)
+        if _ent.any():
+            _keep = ~_ent
+            AJ = AJ.where(_keep, 0.0)      # Full Debit Note
+            AL = AL.where(_keep, 0.0)      # Provision for DN
+            BK = BK.where(_keep, 0.0)      # Full Credit Notes
+            BM = BM.where(_keep, 0.0)      # Provision for CN
+            BY = BY.where(_keep, 0.0)      # Actaul CN  (BL is derived from it)
+            BZ = BZ.where(_keep, 0.0)      # Actual DN  (AK is derived from it)
 
     # AK  Actual Debit Note = the actual vendor DN credit (reduces cost).
     #     Equals Actual DN (BZ), capped above for full reversals.

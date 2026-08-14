@@ -1875,6 +1875,33 @@ def summary_report(profit_df: pd.DataFrame,
     return pd.DataFrame(data)
 
 
+# Summary rows hidden per vertical. IT AD counts DEVICES, not weight, so its
+# Quantity row is a unit count and "per Kg" reads as rupees-per-device — a
+# meaningless figure, so the manual doesn't carry it either.
+HIDDEN_SUMMARY_ROWS: dict[str, tuple[str, ...]] = {
+    "IT AD": ("Revenue Per Kg", "Purchase Cost Per Kg"),
+}
+
+
+def drop_hidden_summary_rows(summaries: dict) -> dict:
+    """Remove the per-vertical hidden rows listed in HIDDEN_SUMMARY_ROWS.
+
+    DISPLAY-ONLY — nothing is recomputed, and no tab other than those named is
+    touched. MUST run LAST, after apply_frozen / _recompute_fy / the Enterprise
+    op-cost override / insert_transport_row, every one of which indexes the
+    fixed summary layout by POSITION; dropping a row earlier would shift those
+    indices and silently corrupt frozen months. Idempotent."""
+    if not summaries:
+        return summaries
+    out = {}
+    for tab, df in summaries.items():
+        hide = HIDDEN_SUMMARY_ROWS.get(str(tab).strip())
+        if hide and df is not None and "Metric" in getattr(df, "columns", []):
+            df = df[~df["Metric"].astype(str).str.strip().isin(hide)].reset_index(drop=True)
+        out[tab] = df
+    return out
+
+
 def insert_transport_row(df: pd.DataFrame) -> pd.DataFrame:
     """Add an absolute 'Transportation Charges' (₹) row directly ABOVE
     'Operational Cost', matching the manual's layout.

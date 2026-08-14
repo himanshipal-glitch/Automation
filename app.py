@@ -1052,7 +1052,11 @@ if page == "Upload Files":
             st.rerun()
 
     _nodn_count = db.no_dn_count()
-    _nodn_when = db.no_dn_last_updated()
+    # getattr, not a direct call: on a cloud redeploy Streamlit re-executes app.py
+    # but can still be holding the PREVIOUS database module, so a helper added in
+    # the same commit may not exist yet for a rerun or two. This is a display-only
+    # timestamp — it must never take the whole app down while that settles.
+    _nodn_when = getattr(db, "no_dn_last_updated", lambda: None)()
     with st.expander(f"🚫 'CF.DN = No' shipment exclusion list — {_nodn_count:,} shipments"
                      + ("" if _nodn_count else " (empty)")
                      + (f" · last replaced {_nodn_when:%d-%b-%Y %H:%M}" if _nodn_when else ""),

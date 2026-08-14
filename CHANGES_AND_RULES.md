@@ -1146,3 +1146,67 @@ takes different lines at different prices.
 
 One-word fix (`sorted(amz_bills)`), NOT applied. Sales and every other vertical
 are stable; only Re-Commerce Purchases moves.
+
+---
+
+# 2026-08-14 — The 3rd debit note is now visible (label only)
+
+`cleaning._pivot_to_wide` -> new `{prefix}_2_Numbers_All`; `compute` uses it for
+the `Debit Note No. 2` cell.
+
+## Why
+
+Five End Generator shipments carry THREE debit notes. Slot 2's SubTotal already
+summed every remaining note — the amounts were always right — but the slot
+showed only ONE note number, so the sheet read as 2 notes against a 3-note
+figure. `SH04261402`: slot 1 = `27VC00037` 4,594.92, slot 2 = `27VC00048`
+**28,699.96**, which is 4,273.96 (00048) + 24,426.00 (00060). Total 33,294.88 =
+the MIS sum of all three, to the paisa.
+
+## What changed
+
+Where slot 2 collapses 2+ notes, cleaning now also records them joined with
+' & ', and that string is shown in `Debit Note No. 2` — the way the manual
+writes it ("36/MET/27VC00048 & 00060").
+
+**The real `DN_2_Vendor_Credit_Number` column is untouched.** Live logic matches
+note numbers against it with `.isin` (the freight-credit routing in
+`build_profitability`) and would stop matching a joined string. The label is a
+separate column, blank on every 1- or 2-note shipment.
+
+## Verified — the only thing that may move is the label
+
+```
+Details frame, all 107 columns, cell by cell : ONLY 'Debit Note No. 2' differs
+                                               (5 rows)
+numeric columns whose TOTAL moved            : 0
+summary cells moved (all tabs)               : 0
+freight routing, with dn_df passed so it
+  actually runs                              : 4 rows, -18,609.50 before AND after
+Actual DN total       1,679,952.87 before AND after
+Total Cost total    182,211,521.83 before AND after
+```
+
+Relabelled rows, amounts unchanged:
+
+```
+SH04261402  27VC00048  ->  27VC00048 & 27VC00060   ActualDN 28,216.00
+SH04262106  27VC00058  ->  27VC00058 & 27VC00088   ActualDN 39,182.26
+SH05260302  27VC00085  ->  27VC00085 & 27VC00090   ActualDN 12,511.55
+SH05260304  27VC00092  ->  27VC00092 & 27VC00093   ActualDN 13,832.66
+SH05260303  27VC00086  ->  27VC00086 & 27VC00091   ActualDN 14,027.70
+```
+
+## Clears an earlier open item
+
+The 5 End Generator notes previously flagged as "manual's Actual DN doesn't
+match the note in Zoho" (`27VC00037/00054/00081/00082/00087`) were never
+mismatches. They are these same multi-note shipments: the manual's figure is the
+sum of ALL the notes, and the earlier check compared it against just one. Every
+one agrees with us to within a rupee. **Off the open list.**
+
+## Scope
+
+DN only. No shipment in this MIS has 3+ credit notes (DN: 5 shipments, CN: 0),
+so the CN side has nothing to show; `CN_2_Numbers_All` is emitted by the same
+helper but is not wired to any output column.

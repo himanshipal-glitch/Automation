@@ -724,9 +724,22 @@ def _pivot_to_wide(df: pd.DataFrame, ref_col: str, fields: list[str], prefix: st
     the full total across all notes (the manual sums them all, displays two).
     Protected verticals come in pre-collapsed to ONE row per shipment, so slot 2
     is empty and they are unaffected.
+
+    Also emits `{prefix}_2_Numbers_All` — every note number folded into slot 2,
+    joined with ' & ' — but ONLY when slot 2 carries more than one note. It is a
+    DISPLAY label so the shown note numbers account for the whole slot-2 amount
+    (the manual writes them the same way: "36/MET/27VC00048 & 36/MET/27VC00060").
+    The real `{prefix}_2_<num>` column is left exactly as it was, because live
+    logic matches note numbers against it with .isin (see the freight-credit
+    routing in compute.build_profitability) and would stop matching a joined
+    string. Blank for every 1- or 2-note shipment, so nothing else changes.
+
     Returns a wide DataFrame with one row per shipment.
     """
     _AGG = ("SubTotal", "Quantity")
+    # the note-number field for this sheet (not the associated-bill reference)
+    _num_f = next((f for f in fields
+                   if f.endswith("Number") and "Associated" not in f), None)
     rows = []
     for ref, grp in df.groupby(ref_col, sort=False):
         grp = grp.reset_index(drop=True)
@@ -740,6 +753,14 @@ def _pivot_to_wide(df: pd.DataFrame, ref_col: str, fields: list[str], prefix: st
                                           if (len(rest) and f in grp.columns) else 0)
             else:
                 row[f"{prefix}_2_{f}"] = rest.iloc[0][f] if (len(rest) and f in grp.columns) else None
+        # display label — only when slot 2 actually collapses 2+ notes
+        _all = None
+        if _num_f and _num_f in grp.columns and len(rest) > 1:
+            _n = [str(x).strip() for x in rest[_num_f].tolist()]
+            _n = [x for x in _n if x and x.lower() not in ("nan", "none", "nat")]
+            if len(_n) > 1:
+                _all = " & ".join(dict.fromkeys(_n))     # de-duped, order kept
+        row[f"{prefix}_2_Numbers_All"] = _all
         rows.append(row)
     return pd.DataFrame(rows)
 

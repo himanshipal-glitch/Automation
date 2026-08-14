@@ -515,6 +515,17 @@ def build_profitability(merged_df: pd.DataFrame,
             BY = BY.where(_keep, 0.0)      # Actaul CN  (BL is derived from it)
             BZ = BZ.where(_keep, 0.0)      # Actual DN  (AK is derived from it)
 
+    # 'Debit Note No. 2' label — slot 2 holds ONE note number but its SubTotal is
+    # the sum of EVERY remaining note on the shipment, so a 3-note shipment showed
+    # only 2 numbers against a 3-note amount. Where cleaning collapsed more than
+    # one note into the slot it also recorded them joined, so show that instead
+    # (e.g. "36/MET/27VC00048 & 36/MET/27VC00060" — how the manual writes it).
+    # LABEL ONLY: no amount is touched, and DN_2_Vendor_Credit_Number itself is
+    # left alone so the freight-credit routing above keeps matching on it.
+    _dn2_label = _s(d, "DN_2_Vendor_Credit_Number", "")
+    _dn2_all = _s(d, "DN_2_Numbers_All", "").astype(str).str.strip()
+    _dn2_label = _dn2_label.mask(~_dn2_all.isin(["", "nan", "None", "NaT"]), _dn2_all)
+
     # AK  Actual Debit Note = the actual vendor DN credit (reduces cost).
     #     Equals Actual DN (BZ), capped above for full reversals.
     AK  = BZ
@@ -684,7 +695,7 @@ def build_profitability(merged_df: pd.DataFrame,
         # Debit Notes to Suppliers
         ("Debit Note No.",           _s(d, "DN_1_Vendor_Credit_Number", "")),
         ("Debit Note Date.",         _dt_str(_s(d, "DN_1_Vendor_Credit_Date", ""))),
-        ("Debit Note No. 2",         _s(d, "DN_2_Vendor_Credit_Number", "")),
+        ("Debit Note No. 2",         _dn2_label),
         ("Debit Note Date. 2",       _dt_str(_s(d, "DN_2_Vendor_Credit_Date", ""))),
         ("Full Debit Note",          AJ),
         ("Actual Debit Note",        AK),

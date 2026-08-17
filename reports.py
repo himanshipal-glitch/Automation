@@ -1946,9 +1946,17 @@ def insert_transport_row(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ── Per-vertical receivables attribution (for DSO) ────────────────────────────
+# Matched as SUBSTRINGS of the invoice's middle segment, so the current prefixes
+# and last year's 'MP…' ones both land: 'mpafr'→afr, 'mppet'→pet, 'mpmet'→met.
+# 'itad' is listed as well as 'iad' because ITAD's OLD prefix is `26/MITAD/…` and
+# "mitad" does NOT contain "iad" — those invoices matched nothing and dropped out
+# of IT AD's receivable entirely (3 RETECK ENVIROTECH invoices, Rs 11,57,824.31,
+# on the 09-Aug MIS). Only "mitad"/"itad" contain "itad", so it can't mis-hit
+# another vertical.
 _AR_TOKEN_TAB = [
     ("rew", "ReWerse"), ("met", "End Generator"), ("rec", "Re-Commerce"),
-    ("afr", "AFR"), ("pet", "Plastic"), ("iad", "IT AD"), ("m4", "M4"),
+    ("afr", "AFR"), ("pet", "Plastic"), ("itad", "IT AD"), ("iad", "IT AD"),
+    ("m4", "M4"),
 ]
 
 

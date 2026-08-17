@@ -1280,3 +1280,63 @@ manual, so there is no manual reference for them; the rule is identical and both
 notes are from `DISTRICT TOURISM DEVELOPMENT OFFICER (Rudraprayag)`, a
 government body with no GST. Plastic's own large pre-existing gap is unrelated
 and unchanged by this.
+
+---
+
+# 2026-08-14 — IT AD's old `26/MITAD/` invoices reach IT AD's receivable
+
+`reports._AR_TOKEN_TAB`
+
+## Why
+
+`_ar_token_tab` maps an AR invoice's middle segment to a vertical by SUBSTRING,
+which handles both the current prefixes and last year's `MP…` ones —
+`mpafr`→afr, `mppet`→pet, `mpmet`→met. But ITAD's old prefix is `26/MITAD/…`,
+and **"mitad" does not contain "iad"**. Those invoices matched no rule, were not
+in the current Details either (prior-FY, so the exact-invoice path also missed),
+and so were attributed to NO vertical at all.
+
+On the 09-Aug MIS that silently dropped 7 IT AD invoices worth Rs 22,97,740.22:
+
+```
+26/MITAD/INV0163  30-Sep-2025  BLACK GOLD RECYCLING    675,588.69
+26/MITAD/INV0167  30-Sep-2025  BLACK GOLD RECYCLING      6,735.59
+26/MITAD/INV0168  09-Oct-2025  BLACK GOLD RECYCLING    453,083.80
+26/MITAD/INV0169  09-Oct-2025  BLACK GOLD RECYCLING      4,507.83
+26/MITAD/INV0284  26-Mar-2026  RETECK ENVIROTECH       611,474.49
+26/MITAD/INV0285  28-Mar-2026  RETECK ENVIROTECH       223,266.58
+26/MITAD/INV0286  28-Mar-2026  RETECK ENVIROTECH       323,083.24
+```
+
+## Fix
+
+Added `("itad", "IT AD")` alongside `("iad", "IT AD")`. Only "mitad"/"itad"
+contain "itad", so it cannot mis-hit another vertical.
+
+## Verified
+
+Token mapping, 11 cases: only `26/MITAD/…` changes — `mpafr`, `mppet`, `mpmet`,
+`36/IAD/…`, `36/AFR/…`, `36/MET/…`, `27/IB/…`, `36/PET/…`, `26/MPPIB/…` all
+unchanged. `26/MPRE/…` deliberately still unattributed (Account Transactions
+calls it ReWerse while the AR sheet's customer column calls it Metal/Plastic —
+those two disagree, so it is left alone pending a decision).
+
+Summary impact: **12 cells, all IT AD, all on the two bifurcation rows.** No
+other vertical moves at all.
+
+```
+IT AD  FY 27 Receivables              Jul   266,135 ->  27,625
+IT AD  Old Receivables (pre-Apr)      Jul         0 -> 238,510
+IT AD  FY 27 Receivables              Aug 1,413,564 -> 423,856
+IT AD  Old Receivables (pre-Apr)      Aug         0 -> 989,708
+```
+
+## What this does NOT fix
+
+The parent `Receivables (exl Legacy)` row is unchanged — the TOTAL was already
+right; what was wrong was the FY-27 vs pre-April split, which now reports
+correctly. IT AD's July receivable is still 266,135 against the manual's
+1,423,960. That difference is the three RETECK invoices (Rs 11,57,824.31, dated
+26-28 March 2026): the month column excludes pre-April balances by the
+"exl Legacy" rule, and the manual includes them. Same class as AFR's ATTAQUANT
+row (Rs 20,780). Open question — not changed here.

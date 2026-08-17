@@ -651,7 +651,12 @@ def _auto_pipeline():
                 # cleaned DN frame carries each note's Account — needed to spot the
                 # 'Marketplace Logistics' (freight) credits, which belong in the
                 # 'Debit note on logistic cost' column, not Actual DN.
-                dn_df=dn)
+                dn_df=dn,
+                # RAW DN sheet: clean_dn keeps 'Marketplace*' accounts only, so the
+                # CGST/SGST/IGST lines survive only here. Needed to tell a
+                # GST-inclusive vendor credit from one that carries no tax at all.
+                dn_raw_df=db.read_table("DN", "raw").drop(columns=["_source_file"],
+                                                          errors="ignore"))
             db.write_table(merged,  "Merged", "inv_bill_cn_dn")
             db.write_table(profit,  "Merged", "profitability")
             # accumulate line rows permanently — Zoho's export is rolling, so a
@@ -1439,7 +1444,11 @@ elif page == "Merge & Compute":
                 | cleaning.void_dn_shipments(
                     db.read_table("DN", "raw").drop(columns=["_source_file"], errors="ignore")),
                 provision_rates=db.load_provision_rates() or None,
-                dn_df=dn_df          # Account column → freight credits (see compute)
+                dn_df=dn_df,         # Account column → freight credits (see compute)
+                # RAW DN sheet keeps the CGST/SGST/IGST lines that clean_dn drops —
+                # tells a GST-inclusive vendor credit from an untaxed one.
+                dn_raw_df=db.read_table("DN", "raw").drop(columns=["_source_file"],
+                                                          errors="ignore")
             )
             # Write to DB (auto-deduplicates col names for SQLite)
             db.write_table(profit_df, "Merged", "profitability")

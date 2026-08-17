@@ -1210,3 +1210,73 @@ one agrees with us to within a rupee. **Off the open list.**
 DN only. No shipment in this MIS has 3+ credit notes (DN: 5 shipments, CN: 0),
 so the CN side has nothing to show; `CN_2_Numbers_All` is emitted by the same
 helper but is not wired to any output column.
+
+---
+
+# 2026-08-14 — GST is stripped from a vendor credit only when the credit HAS GST
+
+`compute.build_profitability` (new `dn_raw_df` arg); both `app.py` call sites.
+
+## Rule
+
+Zoho's vendor-credit `SubTotal` is DOCUMENT level (repeated on every line of the
+note) and folds the tax lines in, so it is GST-inclusive **only when the note
+actually carries CGST/SGST/IGST lines**. A note exported with no tax line is
+already the ex-GST goods value; dividing it by 1.18 strips a tax that was never
+charged.
+
+## Why
+
+`MP/AFR/OFF/0001`, from the 09-Aug MIS:
+
+```
+DebitNotes   36/AFR/27VC00020   SubTotal 23,217.00   Marketplace Purchases (AFR)
+CreditNotes  36/AFR/27CN00020   SubTotal 23,217.00   Marketplace Sales (AFR)
+```
+
+One line each, no tax row on either. The engine took the CREDIT note as 23,217
+and divided the DEBIT note to 19,675.42 — the same number treated two ways —
+overstating that shipment's cost by 3,541.58 (manual 115,843, ours 119,384.58).
+
+Evidence for the rule, over every debit note the manuals actually book:
+
+```
+notes WITHOUT tax lines : manual = SubTotal          1 of 1  (never SubTotal/1.18)
+notes WITH tax lines    : manual = SubTotal / 1.18  29 of 41
+```
+
+## Implementation note
+
+`clean_dn` keeps `Marketplace*` accounts only, so the tax lines survive ONLY on
+the RAW Vendor Credit sheet — the test needs `dn_raw_df`, not `dn_df`. With no
+raw sheet passed the divisor falls back to the old flat 1.18, so figures never
+move silently.
+
+## Verified on the 09-Aug MIS
+
+3 rows of 3,517 change — every one a note with no tax line:
+
+```
+MP/AFR/OFF/0001       AFR      DN 19,675.42 -> 23,217.00   cost 119,384.58 -> 115,843.00
+36/MPPET/27/OFF/0001  Plastic  DN 33,406.78 -> 39,420.00   cost  82,093.22 ->  76,080.00
+36/MPPET/27/OFF/0002  Plastic  DN  1,484.75 ->  1,752.00   cost  73,515.25 ->  73,248.00
+```
+
+AFR against its till-09-08 manual, FY Total:
+
+```
+              manual      before   gap        after   gap
+Purchases  3,493,671   3,497,212  +3,541   3,493,671    0
+Gross Mgn    289,279     285,738  -3,541     289,279    0
+Sales      3,782,949   3,782,949       0   3,782,949    0
+```
+
+**AFR closes to exactly zero.** With the till-09-08 manual in the folder the
+open month is Aug-26 and every AFR line — Sales, Purchases, Gross Margin AND
+Receivable, every month — matches the manual.
+
+Plastic: the two affected shipments do not appear in the till-31-07 Plastic
+manual, so there is no manual reference for them; the rule is identical and both
+notes are from `DISTRICT TOURISM DEVELOPMENT OFFICER (Rudraprayag)`, a
+government body with no GST. Plastic's own large pre-existing gap is unrelated
+and unchanged by this.

@@ -199,7 +199,8 @@ def build_profitability(merged_df: pd.DataFrame,
                         no_dn_shipments: set | None = None,
                         provision_rates: dict | None = None,
                         bill_purchases_df: pd.DataFrame | None = None,
-                        dn_df: pd.DataFrame | None = None) -> pd.DataFrame:
+                        dn_df: pd.DataFrame | None = None,
+                        dn_raw_df: pd.DataFrame | None = None) -> pd.DataFrame:
 
     d = merged_df.copy()
 
@@ -241,11 +242,42 @@ def build_profitability(merged_df: pd.DataFrame,
     dn1_qty = _s(d, "DN_1_Quantity");  dn2_qty = _s(d, "DN_2_Quantity")
 
     BY = cn1_sub + cn2_sub              # Actaul CN (raw positive)
-    # Actual DN — the vendor-credit SubTotal in Zoho is GST-INCLUSIVE (18%), but
-    # the cost should carry the EX-GST value (the manual divides SubTotal by
-    # 1.18). Full reversals are re-set to the full purchase further below.
+    # Actual DN — Zoho's vendor-credit SubTotal is DOCUMENT level (repeated on
+    # every line of the note) and folds the tax lines in, so it is GST-INCLUSIVE
+    # *only when the note actually carries CGST/SGST/IGST lines*. A note exported
+    # with no tax line is already the ex-GST goods value, and dividing it by 1.18
+    # strips a tax that was never charged: 36/AFR/27VC00020 has SubTotal 23,217
+    # on a single 'Marketplace Purchases (AFR)' line and the manual books 23,217,
+    # while we were booking 19,675.42 — overstating that shipment's cost by
+    # 3,541.58. Its matching credit note 36/AFR/27CN00020 has the identical
+    # 23,217 and was already being taken as-is, so the two sides disagreed.
+    # NB: the tax lines only survive on the RAW Vendor Credit sheet — clean_dn
+    # keeps 'Marketplace*' accounts only, so this needs `dn_raw_df`, not `dn_df`.
+    # Full reversals are re-set to the full purchase further below.
     _GST = 1.18
-    BZ = (dn1_sub + dn2_sub) / _GST     # Actual DN (ex-GST goods value)
+    _taxed_notes: set = set()
+    if dn_raw_df is not None and not getattr(dn_raw_df, "empty", True):
+        _nz = lambda c: "".join(ch for ch in str(c).lower() if ch.isalnum())
+        _tacc = next((c for c in dn_raw_df.columns if _nz(c) == "account"), None)
+        _tno = next((c for c in dn_raw_df.columns if _nz(c)
+                     in ("vendorcreditnumber", "debitnotenumber")), None)
+        if _tacc is not None and _tno is not None:
+            _istax = dn_raw_df[_tacc].astype(str).str.contains("cgst|sgst|igst",
+                                                               case=False, na=False)
+            _taxed_notes = (set(dn_raw_df.loc[_istax, _tno].astype(str).str.strip())
+                            - {"", "nan", "None"})
+
+    def _gst_div(_i: int) -> pd.Series:
+        """Per-row divisor: 1.18 for notes carrying GST lines, 1.0 otherwise.
+        With no raw DN sheet to check, fall back to the old flat 1.18 so the
+        figures never move silently."""
+        if not _taxed_notes:
+            return pd.Series(_GST, index=d.index)
+        _nn = _s(d, f"DN_{_i}_Vendor_Credit_Number", "").astype(str).str.strip()
+        return pd.Series(np.where(_nn.isin(_taxed_notes), _GST, 1.0), index=d.index)
+
+    _gd1, _gd2 = _gst_div(1), _gst_div(2)
+    BZ = dn1_sub / _gd1 + dn2_sub / _gd2   # Actual DN (ex-GST goods value)
 
     # ── End Generator resell linkage ───────────────────────────────────────────────────
     # An End Generator shipment that was fully reversed AND returned to the seller (full
@@ -352,7 +384,7 @@ def build_profitability(merged_df: pd.DataFrame,
         Z = -(dn1_sub.where(_m1, 0.0) + dn2_sub.where(_m2, 0.0))
         dn1_sub = dn1_sub.where(~_m1, 0.0)
         dn2_sub = dn2_sub.where(~_m2, 0.0)
-        BZ = (dn1_sub + dn2_sub) / _GST     # recompute Actual DN without them
+        BZ = dn1_sub / _gd1 + dn2_sub / _gd2   # recompute Actual DN without them
 
     AA  = _s(d, "CFEstimated_Logistics_Cost")  # Logistics Provision (estimate)
     # The provision is only an ESTIMATE of the transport cost. Drop it whenever the
@@ -392,11 +424,11 @@ def build_profitability(merged_df: pd.DataFrame,
                    * pd.to_numeric(_s(_bp, "Rate"), errors="coerce").fillna(0.0))
         _bp_map = _bp_pur.groupby(_s(_bp, "Bill_Number", "").astype(str).str.strip()).sum().to_dict()
         _row_bill = _s(d, "Bill_Number", "").astype(str).str.strip()
-        for _dsub, _acol in ((dn1_sub, "DN_1_Associated_Bill_Number"),
-                             (dn2_sub, "DN_2_Associated_Bill_Number")):
+        for _dsub, _acol, _gdv in ((dn1_sub, "DN_1_Associated_Bill_Number", _gd1),
+                                   (dn2_sub, "DN_2_Associated_Bill_Number", _gd2)):
             _assoc = _s(d, _acol, "").astype(str).str.strip()
             _legpur = _assoc.map(lambda b: float(_bp_map.get(b, 0.0)))
-            _exgst = _dsub / _GST
+            _exgst = _dsub / _gdv
             # only reverse the row whose OWN bill is the one the DN is against —
             # so a fully-returned leg (its own orphan line) is zeroed, while the
             # invoiced leg (a different bill number) keeps its cost.

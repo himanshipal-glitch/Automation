@@ -1340,3 +1340,93 @@ correctly. IT AD's July receivable is still 266,135 against the manual's
 26-28 March 2026): the month column excludes pre-April balances by the
 "exl Legacy" rule, and the manual includes them. Same class as AFR's ATTAQUANT
 row (Rs 20,780). Open question — not changed here.
+
+---
+
+# 2026-08-14 — End Generator: three fixes (full-reversal, op cost, SH072602017)
+
+`compute.py`
+
+## 1. A fully-reversed vendor DN was credited TWICE
+
+Two independent paths both credit back a full return:
+
+* the **vendor-DN** path books the returned leg as a Full Debit Note (`AJ`) and
+  removes that note from Actual DN, and
+* the **sales-side** path (`_full_rev`, CN >= 95% of the sale) caps Actual DN to
+  the whole purchase `Q` "so the cost nets to 0".
+
+When BOTH fire, the purchase is credited back twice. `SH072621010` (REDDY PAI
+METALS, whole 12,380 Kg load returned on two notes):
+
+```
+1,361,800 purchase + 45,100 freight - 1,361,800 (AJ) - 1,361,800 (AK) = -1,316,700
+```
+
+A **negative Total Cost** on a shipment with a positive purchase. Fixed by
+skipping the `_full_rev` cap on rows the vendor-DN path already handled
+(`_dn_rev > 0`); the shipment's remaining partial note keeps its own ex-GST
+value.
+
+Measured against HEAD: **1 row of 3,517 changes.** Negative-cost rows 3 -> 2.
+
+```
+SH072621010   ActualDN 1,361,800 -> 30,278   TotalCost -1,316,700 -> 14,822
+```
+
+The manual shows 22,600; the residual 7,778 is the manual hand-reducing that
+shipment's freight to 22,600 against the bill's actual 45,100 (SUNDAR TRANSPORT
+45,000 + 100) — their edit, not ours.
+
+## 2. Operational cost — `OPERATIONAL_COST_PER_KG`
+
+The manual charges Rs 1.80 per Kg of NET purchase quantity on three July
+S K TRADING CO loads, totalling its Jul Operational Cost row exactly:
+
+```
+SH072627010  29,740 x 1.80 = 53,532
+SH07262901   29,590 x 1.80 = 53,262
+SH07262902   21,690 x 1.80 = 39,042
+                             -------
+                             145,836
+```
+
+**The trigger is NOT derivable.** Supplier alone does not explain it — the June
+S K TRADING CO shipment `SH06261702` (19,630 Kg) carries no operational cost,
+and no non-S K TRADING shipment carries one. Rather than guess a rule and have
+it spread wrongly, the three shipments the manual actually charges are listed
+explicitly. **Add new shipments each month, or replace the dict with the real
+rule once the business states it.**
+
+## 3. Hand-entered provisions — `MANUAL_PROVISIONS`
+
+`SH072602017` carries 1,668,964 / 1,559,799 in the manual — 37.1% and 34.6% of
+base, where the End Generator rate gives 204,569 / 205,302 (4.55%). Not any
+rate, so it was typed in; it reads as an expected large return not yet raised as
+a note. Mirrored per-shipment, and applied ONLY while the shipment has no actual
+CN/DN, so it stands down by itself when the real note arrives.
+
+## Result — End Generator FY, engine vs the till-09-08 manual
+
+```
+                     manual        before        gap        after       gap
+Sales            65,458,988    66,813,486  +1,354,498   65,458,989        +1
+Purchases        63,332,714    64,792,064  +1,459,350   63,327,669    -5,045
+Gross Margin      2,126,274     2,021,421    -104,853    2,131,319    +5,046
+Operational Cost    145,836             0    -145,836      145,836         0
+```
+
+**FY Sales closes to Rs 1.** Blast radius: 5 rows, ALL End Generator (1 from fix
+1, 4 from fixes 2+3). No other vertical moves.
+
+## Left open
+
+* Transportation Charges Jul still -60,000 against the manual — not diagnosed.
+* Purchases/GM residual ~5,045, largely the SH072621010 freight edit above.
+* The 3 op-cost shipments' Details **Total Cost** still excludes the operational
+  cost (the manual adds it there). The SUMMARY is correct either way, because
+  the manual's own Purchases line excludes it too (its Sales - Purchases = its
+  Gross Margin exactly). Display difference only.
+* Two negative-cost rows remain and were NOT touched: `MP/RECM/0002`
+  (Re-Commerce — out of bounds by instruction) and `SH07260704` (ReWerse — out
+  of scope). Different cause from fix 1.

@@ -136,6 +136,37 @@ FAKE_DN_CATEGORY = "Fake DN (Excluded)"
 # applies it, just above `AK = BZ`.
 ENTERPRISE_NO_NOTES: bool = True
 
+# ── Per-shipment manual figures mirrored from the signed-off report ───────────
+# These are NOT derived rules — they are values the business set by hand on a
+# specific shipment. Listed explicitly so they are visible and auditable rather
+# than guessed at, and so a wrong generalisation can't silently spread.
+
+# Operational cost charged at a rate per Kg of NET purchase quantity.
+# The 09-Aug End Generator manual charges Rs 1.80/Kg on three July S K TRADING CO
+# loads (SH072627010 29,740 Kg → 53,532; SH07262901 29,590 → 53,262;
+# SH07262902 21,690 → 39,042; total 145,836 = its Jul Operational Cost row).
+# NOTE: supplier alone is NOT the trigger — the June S K TRADING CO shipment
+# SH06261702 (19,630 Kg) carries NO operational cost, so the real rule is
+# unconfirmed. Until it is, only the shipments the manual actually charges are
+# listed. ADD NEW SHIPMENTS HERE each month, or replace this with the real rule
+# once the business confirms it.
+OPERATIONAL_COST_PER_KG: dict[str, float] = {
+    "SH072627010": 1.80,
+    "SH07262901":  1.80,
+    "SH07262902":  1.80,
+}
+
+# CN/DN provisions entered BY HAND on a shipment, overriding the vertical rate.
+# {Shipment ID: (Provision for DN, Provision for CN)} — positive values.
+# SH072602017: the manual carries 1,668,964 / 1,559,799 (37.1% / 34.6% of base)
+# where the End Generator rate would give 204,569 / 205,302 (4.55%). Not any
+# rate, so it was typed in — it reads as an expected large return that has not
+# been raised as a note yet. Applied ONLY while no actual CN/DN exists on the
+# shipment, so it stands down automatically once the real note arrives.
+MANUAL_PROVISIONS: dict[str, tuple[float, float]] = {
+    "SH072602017": (1_668_964.0, 1_559_799.0),
+}
+
 # ── CN/DN provision rates ─────────────────────────────────────────────────────
 # Default provision rate per Broad Category, as a FRACTION (0.0455 = 4.55%).
 # Applied to Sale Amount (Provision for CN) and Purchase Price (Provision for DN).
@@ -488,7 +519,15 @@ def build_profitability(merged_df: pd.DataFrame,
     # Full reversal returned to seller → the ENTIRE purchase is credited back,
     # so the Actual DN = full purchase (Q), nets cost to 0. Partial DNs keep the
     # ex-GST value computed above.
-    BZ  = pd.Series(np.where(_full_rev & (BZ > 0), Q, BZ), index=d.index)
+    #
+    # ... but ONLY when the vendor-DN path above has NOT already booked this leg
+    # as a Full Debit Note. If it has, `AJ` already credits the whole purchase
+    # back, and capping Actual DN to Q credits it a SECOND time — driving Total
+    # Cost negative (SH072621010: 1,361,800 purchase + 45,100 freight
+    # − 1,361,800 (AJ) − 1,361,800 (AK) = −1,316,700). Exclude those rows; the
+    # residual partial note on the shipment keeps its own ex-GST value.
+    BZ  = pd.Series(np.where(_full_rev & (BZ > 0) & (_dn_rev <= 0), Q, BZ),
+                    index=d.index)
 
     # ── Calculated columns ────────────────────────────────────────────────────
     # Return Qty rule: a note counts as a PHYSICAL return only if its SubTotal
@@ -557,6 +596,28 @@ def build_profitability(merged_df: pd.DataFrame,
     _dn2_label = _s(d, "DN_2_Vendor_Credit_Number", "")
     _dn2_all = _s(d, "DN_2_Numbers_All", "").astype(str).str.strip()
     _dn2_label = _dn2_label.mask(~_dn2_all.isin(["", "nan", "None", "NaT"]), _dn2_all)
+
+    # ── Per-shipment manual figures (see the constants at the top) ────────────
+    # Operational cost at a rate per Kg of NET purchase quantity, on the exact
+    # shipments the signed-off report charges it on. Added to the row's
+    # Operational Cost so the summary's own Operational Cost line picks it up.
+    if OPERATIONAL_COST_PER_KG:
+        _oc_rate = _ship_key.map(lambda s: OPERATIONAL_COST_PER_KG.get(str(s).strip(), 0.0))
+        if (_oc_rate != 0).any():
+            AC = AC + (S.clip(lower=0) * _oc_rate)
+
+    # Hand-entered CN/DN provisions, replacing the rate-driven ones — but only
+    # while the shipment carries no ACTUAL note, so the override stands down by
+    # itself once the real credit/debit note is raised.
+    if MANUAL_PROVISIONS:
+        _mp = _ship_key.astype(str).str.strip()
+        _has_actual = ((BY.groupby(_ship_key).transform("sum") > 1)
+                       | (BZ.groupby(_ship_key).transform("sum") > 1))
+        for _sid, (_pdn, _pcn) in MANUAL_PROVISIONS.items():
+            _hit = (_mp == str(_sid).strip()) & ~_has_actual
+            if _hit.any():
+                AL = AL.where(~_hit, float(_pdn))
+                BM = BM.where(~_hit, float(_pcn))
 
     # AK  Actual Debit Note = the actual vendor DN credit (reduces cost).
     #     Equals Actual DN (BZ), capped above for full reversals.

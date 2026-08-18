@@ -1377,6 +1377,21 @@ def _itad_reco_mask(df: pd.DataFrame) -> pd.Series:
     cs = df[cs_col].astype(str).str.strip().str.lower()
     bill_missing = cs.isin(list(_RECO_BILL_MISSING))    # purchase side absent
     inv_missing  = cs.str.startswith(_RECO_ORPHAN_PREFIX)  # sales invoice absent
+
+    # ...but an "orphan bill" line whose SHIPMENT already carries a sale is not a
+    # one-sided trade at all — it is a cost component of a completed one, e.g. a
+    # freight line on the same bill as the goods. M4's SH07262906 bill
+    # ACE/26-27/0152 has 'Polo T Shirt' 35 @ 480 (invoiced) plus 'Transport
+    # Charge' 1 @ 1,500 (never invoiced on its own); the transport line was being
+    # held back for review while the manual carries it in Details, so the
+    # shipment's cost came out Rs 1,500 short. Only shipments with NO sale at all
+    # stay candidates. Same principle already applied to blank-shipment charge
+    # legs that match by material.
+    if len(df.columns) > 48:
+        _sale = pd.to_numeric(df.iloc[:, 48], errors="coerce").fillna(0)
+        _ship = df.iloc[:, 3].astype(str).str.strip()
+        _ship_has_sale = (_sale != 0).groupby(_ship).transform("max").astype(bool)
+        inv_missing = inv_missing & ~(_ship_has_sale & (_ship != ""))
     return bill_missing | inv_missing
 
 

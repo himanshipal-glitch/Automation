@@ -136,6 +136,15 @@ FAKE_DN_CATEGORY = "Fake DN (Excluded)"
 # applies it, just above `AK = BZ`.
 ENTERPRISE_NO_NOTES: bool = True
 
+# IT AD carries a few WEIGHT-based items ('ITAD Plastic waste', 'Mix E-Waste
+# (ITAD)') whose quantity is in Kg, while the rest of IT AD is a device count.
+# The signed-off report sums the raw Kg alongside the unit counts and does NOT
+# convert. Converting them to MT made the summary's open-month quantity go
+# NEGATIVE (IT AD Aug-26 = −517), because frozen months held the manual's raw Kg
+# and live months held the converted value. Off, per the report owner.
+ITAD_KG_ITEMS_TO_MT: bool = False
+ITAD_KG_ITEMS: set = {"itad plastic waste", "mix e-waste (itad)"}
+
 # ── Per-shipment manual figures mirrored from the signed-off report ───────────
 # These are NOT derived rules — they are values the business set by hand on a
 # specific shipment. Listed explicitly so they are visible and auditable rather
@@ -636,14 +645,17 @@ def build_profitability(merged_df: pd.DataFrame,
     BA  = AV - AZ
 
     # ITAD weight-based items ('ITAD Plastic waste', 'Mix E-Waste (ITAD)') carry
-    # their quantity in KG, but ITAD is counted in UNITS — so summing them raw
-    # inflates the ITAD quantity by ~1000×. Convert those rows' NET SALES QTY to MT
-    # (÷1000) here, AFTER the sale Amount (AX = AV×AW) is fixed, so ONLY the quantity
-    # total changes — never Sales, Purchases, margins. Exact item-name match only.
-    _KG_ITEMS = {"itad plastic waste", "mix e-waste (itad)"}
-    _kg_q = _s(d, "Item_Name", "").astype(str).str.strip().str.lower().isin(_KG_ITEMS)
-    if _kg_q.any():
-        BA = BA.where(~_kg_q, BA / 1000.0)
+    # their quantity in KG while ITAD is otherwise counted in UNITS, so summing
+    # them raw mixes the two. Converting them to MT (÷1000) was tried, but the
+    # signed-off report does NOT do it — it sums the raw Kg alongside the unit
+    # counts — and the mismatch made the summary's open-month quantity go
+    # NEGATIVE (IT AD Aug-26 showed −517), because the frozen months carried the
+    # manual's raw Kg while the live months carried the converted figure.
+    # Off by default, per the report owner. Flip to True to restore it.
+    if ITAD_KG_ITEMS_TO_MT:
+        _kg_q = _s(d, "Item_Name", "").astype(str).str.strip().str.lower().isin(ITAD_KG_ITEMS)
+        if _kg_q.any():
+            BA = BA.where(~_kg_q, BA / 1000.0)
 
     # AY  Qty Check
     AY  = (AV == O)

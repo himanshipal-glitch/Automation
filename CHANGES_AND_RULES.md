@@ -1430,3 +1430,57 @@ Operational Cost    145,836             0    -145,836      145,836         0
 * Two negative-cost rows remain and were NOT touched: `MP/RECM/0002`
   (Re-Commerce — out of bounds by instruction) and `SH07260704` (ReWerse — out
   of scope). Different cause from fix 1.
+
+---
+
+# 2026-08-16 — Report-owner feedback: ITAD quantity + M4 transport charge
+
+Both changes requested by the report owner after reviewing the 09-Aug run.
+
+## 1. IT AD — stop converting weight items to MT (`ITAD_KG_ITEMS_TO_MT = False`)
+
+IT AD carries a few WEIGHT items ('ITAD Plastic waste', 'Mix E-Waste (ITAD)') in
+Kg while the rest of the vertical is a device count. The engine converted those
+rows to MT (÷1000). The signed-off report does NOT — it sums the raw Kg
+alongside the unit counts.
+
+The mismatch is what pushed the summary's open-month quantity NEGATIVE: frozen
+months carried the manual's raw Kg while live months carried the converted
+figure, and the open month is a balancing plug, so it absorbed the difference as
+**IT AD Aug-26 = −517**.
+
+```
+IT AD Quantity     Apr-26     May-26     Jun-26     Jul-26   Aug-26
+before           5,053.00     117.00   3,549.00   3,303.00   692.00
+after            5,053.00   1,326.00   3,549.00  41,566.00   692.00
+manual           6,453.55   1,326.00   3,549.26  41,566.40   692.00
+```
+
+Negatives gone; May/Jun/Jul/Aug match. April is still 1,400.55 out on an
+UNFROZEN run — open, to chase against the 16-Aug files.
+
+Left as a switch so it can be restored without archaeology.
+
+## 2. Reco Items — a freight line on an invoiced shipment is not an orphan
+
+`reports._itad_reco_mask`
+
+An "orphan bill" line whose SHIPMENT already carries a sale is not a one-sided
+trade — it is a cost component of a completed one. M4's `SH07262906` bill
+`ACE/26-27/0152` has 'Polo T Shirt' 35 @ 480 (invoiced) plus 'Transport Charge'
+1 @ 1,500 (never invoiced on its own). The transport line was held back for
+review while the manual carries it in Details, so the shipment's cost came out
+Rs 1,500 short.
+
+Now only shipments with NO sale at all stay candidates — the same principle
+already applied to blank-shipment charge legs that match by material.
+
+```
+reco candidates 70 -> 63 (7 lines freed): M4 Transport Charge x6 (13,900),
+                                          Metal MS Scrap x1 (894,955)
+M4 FY Purchases 241,520 -> 255,420   = the manual's figure exactly
+```
+
+Still correctly gated: IT AD `SH08261003` and Enterprise `SH082607013` — both
+genuine purchases with no sale. IT AD / End Generator / Plastic FY Purchases
+unchanged.
